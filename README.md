@@ -44,8 +44,13 @@ SUBMONITOR_MASTER_KEY=一个至少32位且长期保持不变的随机密钥
 启动：
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+正式部署默认直接拉取 GitHub Actions 构建的 GHCR 镜像，不在 1C1G 服务器上安装依赖或编译前端。更新版本时执行 `git pull && docker compose pull && docker compose up -d`。如果 GHCR 镜像尚未公开或服务器无法拉取，再使用 `docker compose up -d --build` 本地构建。
+
+如果必须本地构建，国内服务器可以在 `.env` 中设置 `NPM_REGISTRY=https://registry.npmmirror.com`，构建缓存和重试参数已经写入 Dockerfile。
 
 访问 `http://服务器地址:8787` 会直接进入公开监控页，不需要登录。配置和审计页面使用 `SUBMONITOR_ADMIN_PASSWORD` 登录后访问。
 

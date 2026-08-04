@@ -1,9 +1,14 @@
+# syntax=docker/dockerfile:1.7
 FROM node:24-alpine AS build
+
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=submonitor-pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm config set registry "${NPM_REGISTRY}" \
+    && pnpm install --frozen-lockfile --prefer-offline --fetch-retries=5 --fetch-timeout=120000
 COPY index.html vite.config.js ./
 COPY src/web ./src/web
 RUN pnpm build
