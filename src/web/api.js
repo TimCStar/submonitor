@@ -11,6 +11,7 @@ async function request(path, options = {}) {
   if (!response.ok || !envelope?.ok) {
     const error = new Error(envelope?.error?.message || `Request failed with HTTP ${response.status}`);
     error.status = response.status;
+    error.code = envelope?.error?.code || "REQUEST_FAILED";
     throw error;
   }
   return envelope.data;
@@ -18,8 +19,12 @@ async function request(path, options = {}) {
 
 export const api = {
   session: () => request("/api/auth/session"),
-  login: (password) => request("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
+  login: (password, totp = "") => request("/api/auth/login", { method: "POST", body: JSON.stringify({ password, totp }) }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
+  twoFactorStatus: () => request("/api/auth/2fa"),
+  setupTwoFactor: () => request("/api/auth/2fa/setup", { method: "POST" }),
+  enableTwoFactor: (code) => request("/api/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }),
+  disableTwoFactor: (password, code) => request("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify({ password, code }) }),
   publicDashboard: () => request("/api/public/dashboard"),
   publicSubscribers: (id) => request(`/api/public/monitors/${encodeURIComponent(id)}/subscribers`),
   adminDashboard: () => request("/api/dashboard"),

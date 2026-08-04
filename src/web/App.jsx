@@ -98,10 +98,12 @@ function Toast({ toast, onClose }) {
 
 function LoginDialog({ open, onClose, onAuthenticated }) {
   const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
-    if (open) { setPassword(""); setError(""); }
+    if (open) { setPassword(""); setTotp(""); setRequiresTwoFactor(false); setError(""); }
   }, [open]);
   if (!open) return null;
 
@@ -110,9 +112,13 @@ function LoginDialog({ open, onClose, onAuthenticated }) {
     setSubmitting(true);
     setError("");
     try {
-      await api.login(password);
+      await api.login(password, totp);
       await onAuthenticated();
     } catch (requestError) {
+      if (["TWO_FACTOR_REQUIRED", "TWO_FACTOR_INVALID"].includes(requestError.code)) {
+        setRequiresTwoFactor(true);
+        setTotp("");
+      }
       setError(requestError.message);
     } finally {
       setSubmitting(false);
@@ -128,6 +134,7 @@ function LoginDialog({ open, onClose, onAuthenticated }) {
         <form onSubmit={submit}>
           <label htmlFor="password">管理员密码</label>
           <div className="input-with-icon"><KeyRound size={17} /><input id="password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus required /></div>
+          {requiresTwoFactor && <><label htmlFor="totp">身份验证器验证码</label><div className="input-with-icon"><ShieldCheck size={17} /><input id="totp" type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value.replace(/\D/g, "").slice(0, 6))} required /></div></>}
           {error && <div className="form-error"><AlertCircle size={16} />{error}</div>}
           <button className="button primary full" disabled={submitting}>{submitting ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}登录后台</button>
         </form>
@@ -218,6 +225,67 @@ function AuditPage({ entries }) {
 
 function Toggle({ checked, onChange, label }) {
   return <button type="button" className={`toggle ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}><span /><strong>{label}</strong></button>;
+}
+
+function TwoFactorSettings({ notify }) {
+  const [security, setSecurity] = useState({ loading: true, enabled: false, pending: false });
+  const [setup, setSetup] = useState(null);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    api.twoFactorStatus().then((result) => {
+      if (active) setSecurity({ loading: false, ...result });
+    }).catch((error) => {
+      if (active) { setSecurity({ loading: false, enabled: false, pending: false }); notify("error", error.message); }
+    });
+    return () => { active = false; };
+  }, [notify]);
+
+  async function generate() {
+    setBusy("setup");
+    try {
+      const result = await api.setupTwoFactor();
+      setSetup(result);
+      setSecurity({ loading: false, enabled: false, pending: true });
+      setCode("");
+      notify("success", "绑定密钥已生成，请在身份验证器中添加");
+    } catch (error) { notify("error", error.message); }
+    finally { setBusy(""); }
+  }
+
+  async function enable() {
+    setBusy("enable");
+    try {
+      const result = await api.enableTwoFactor(code);
+      setSecurity({ loading: false, ...result });
+      setSetup(null);
+      setCode("");
+      notify("success", "2FA 已启用");
+    } catch (error) { notify("error", error.message); }
+    finally { setBusy(""); }
+  }
+
+  async function disable() {
+    setBusy("disable");
+    try {
+      const result = await api.disableTwoFactor(password, code);
+      setSecurity({ loading: false, ...result });
+      setPassword("");
+      setCode("");
+      notify("success", "2FA 已停用");
+    } catch (error) { notify("error", error.message); }
+    finally { setBusy(""); }
+  }
+
+  return <section className="form-section security-section"><div className="form-section-title"><ShieldCheck size={19} /><div><h3>后台安全</h3><span>管理员登录保护</span></div></div><div className="security-config">
+    <div className="security-heading"><div><strong>双因素认证（2FA）</strong><small>使用身份验证器生成 6 位动态验证码</small></div><span className={`security-status ${security.enabled ? "enabled" : "disabled"}`}><i />{security.loading ? "读取中" : security.enabled ? "已启用" : "未启用"}</span></div>
+    {!security.loading && !security.enabled && !setup && <div className="security-actions"><span className="muted">启用后，管理员登录需要密码和动态验证码。</span><button type="button" className="button secondary" onClick={generate} disabled={busy}><ShieldCheck size={16} />生成绑定密钥</button></div>}
+    {!security.loading && !security.enabled && setup && <div className="security-enroll"><div className="security-secret"><span>绑定密钥</span><code>{setup.secret}</code></div><label className="field"><span>导入 URI</span><input readOnly value={setup.otpauthUri} onFocus={(event) => event.target.select()} /></label><div className="security-code-row"><label className="field"><span>验证码</span><input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></label><button type="button" className="button primary" onClick={enable} disabled={busy || code.length !== 6}>{busy === "enable" ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}启用 2FA</button></div></div>}
+    {!security.loading && security.enabled && <div className="security-enroll"><div className="security-code-row"><label className="field"><span>管理员密码</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><label className="field"><span>当前验证码</span><input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></label><button type="button" className="button secondary" onClick={disable} disabled={busy || password.length === 0 || code.length !== 6}>{busy === "disable" ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}停用 2FA</button></div></div>}
+  </div></section>;
 }
 
 function ChoiceButtons({ values, selected, onChange }) {
@@ -386,7 +454,7 @@ function SettingsPage({ adminData, selectedId, onSelect, reload, notify }) {
     try { const created = await api.createMonitor({ name: `Codex 账号 ${adminData.monitors.length + 1}` }); await reload(); onSelect(created.id); notify("success", "已创建监控任务"); }
     catch (error) { notify("error", error.message); }
   }
-  return <div className="admin-layout"><aside className="monitor-admin-list"><div className="admin-list-head"><div><span className="eyebrow">ACCOUNTS</span><h3>监控任务</h3></div><button className="icon-button" onClick={create} title="添加任务"><Plus size={18} /></button></div><div>{adminData.monitors.map((item) => <button key={item.id} className={monitor?.id === item.id ? "active" : ""} onClick={() => onSelect(item.id)}><span><strong>{item.name}</strong><small>#{item.sourceAccountId || "未配置"}</small></span><span className={`status-dot ${item.enabled ? item.runtime.status : "disabled"}`} /></button>)}</div></aside><div className="admin-form-area">{monitor ? <MonitorForm monitor={monitor} onSaved={async () => reload()} onDeleted={async () => { await reload(); onSelect(null); }} notify={notify} /> : <EmptyState icon={ServerCog} title="暂无监控任务" action={<button className="button primary" onClick={create}><Plus size={16} />添加任务</button>} />}</div></div>;
+  return <div className="page-stack"><TwoFactorSettings notify={notify} /><div className="admin-layout"><aside className="monitor-admin-list"><div className="admin-list-head"><div><span className="eyebrow">ACCOUNTS</span><h3>监控任务</h3></div><button className="icon-button" onClick={create} title="添加任务"><Plus size={18} /></button></div><div>{adminData.monitors.map((item) => <button key={item.id} className={monitor?.id === item.id ? "active" : ""} onClick={() => onSelect(item.id)}><span><strong>{item.name}</strong><small>#{item.sourceAccountId || "未配置"}</small></span><span className={`status-dot ${item.enabled ? item.runtime.status : "disabled"}`} /></button>)}</div></aside><div className="admin-form-area">{monitor ? <MonitorForm monitor={monitor} onSaved={async () => reload()} onDeleted={async () => { await reload(); onSelect(null); }} notify={notify} /> : <EmptyState icon={ServerCog} title="暂无监控任务" action={<button className="button primary" onClick={create}><Plus size={16} />添加任务</button>} />}</div></div></div>;
 }
 
 function EventDrawer({ event, onClose }) {

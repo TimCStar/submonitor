@@ -38,6 +38,8 @@ const auth = new AuthService({
   signingSecret: masterKey,
   secureCookie,
   sessionHours,
+  database,
+  secretBox,
 });
 
 function emitUpdate(type, payload) {
@@ -217,13 +219,28 @@ async function apiRoute(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     if (!isSameOrigin(request)) return sendError(response, 403, "Cross-origin request rejected", "ORIGIN_REJECTED");
     const address = request.socket.remoteAddress || "unknown";
-    if (!auth.checkRateLimit(address)) return sendError(response, 429, "Too many login attempts", "RATE_LIMITED");
+    const guard = auth.loginGuard(address);
+    if (!guard.allowed) {
+      response.setHeader("Retry-After", String(guard.retryAfterSeconds));
+      return sendError(response, 429, `登录暂时被风控拦截，请在约 ${guard.retryAfterSeconds} 秒后重试`, "RATE_LIMITED");
+    }
     const body = await readJson(request);
     if (!auth.verifyPassword(body.password || "")) {
+      auth.recordLoginFailure(address);
       database.addAudit("warn", "auth.failed", "Administrator login failed", { address });
       return sendError(response, 401, "Password is incorrect", "AUTH_FAILED");
     }
-    auth.clearRateLimit(address);
+    if (auth.isTwoFactorEnabled() && !auth.verifyTwoFactor(body.totp)) {
+      auth.recordLoginFailure(address);
+      database.addAudit("warn", "auth.2fa.failed", "Administrator two-factor verification failed", { address });
+      return sendError(
+        response,
+        401,
+        body.totp ? "身份验证器验证码无效" : "请输入身份验证器验证码",
+        body.totp ? "TWO_FACTOR_INVALID" : "TWO_FACTOR_REQUIRED",
+      );
+    }
+    auth.clearLoginFailures(address);
     response.setHeader("Set-Cookie", auth.sessionCookie(auth.createToken()));
     database.addAudit("info", "auth.login", "Administrator signed in", { address });
     return sendData(response, { authenticated: true });
@@ -232,6 +249,38 @@ async function apiRoute(request, response, url) {
   if (!auth.isAuthenticated(request)) return sendError(response, 401, "Authentication required", "UNAUTHORIZED");
   if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && !isSameOrigin(request)) {
     return sendError(response, 403, "Cross-origin request rejected", "ORIGIN_REJECTED");
+  }
+  if (request.method === "GET" && url.pathname === "/api/auth/2fa") {
+    return sendData(response, auth.twoFactorStatus());
+  }
+  if (request.method === "POST" && url.pathname === "/api/auth/2fa/setup") {
+    try {
+      const result = auth.setupTwoFactor();
+      database.addAudit("info", "auth.2fa.setup", "Two-factor setup secret generated");
+      return sendData(response, result);
+    } catch (error) {
+      return sendError(response, error.status || 400, error.message, error.code);
+    }
+  }
+  if (request.method === "POST" && url.pathname === "/api/auth/2fa/enable") {
+    try {
+      const body = await readJson(request);
+      const result = auth.enableTwoFactor(body.code);
+      database.addAudit("info", "auth.2fa.enabled", "Two-factor authentication enabled");
+      return sendData(response, result);
+    } catch (error) {
+      return sendError(response, error.status || 400, error.message, error.code);
+    }
+  }
+  if (request.method === "POST" && url.pathname === "/api/auth/2fa/disable") {
+    try {
+      const body = await readJson(request);
+      const result = auth.disableTwoFactor(body.password, body.code);
+      database.addAudit("warn", "auth.2fa.disabled", "Two-factor authentication disabled");
+      return sendData(response, result);
+    } catch (error) {
+      return sendError(response, error.status || 400, error.message, error.code);
+    }
   }
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {
     response.setHeader("Set-Cookie", auth.clearCookie());

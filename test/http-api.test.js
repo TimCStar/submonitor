@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { generateTotpCode } from "../src/server/auth.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -67,13 +68,42 @@ test("public monitoring stays anonymous and sanitized while management requires 
   });
   assert.equal(login.status, 200);
   const cookie = login.headers.get("set-cookie").split(";", 1)[0];
+  const twoFactorStatus = await fetch(`${baseUrl}/api/auth/2fa`, { headers: { Cookie: cookie } }).then((response) => response.json());
+  assert.deepEqual(twoFactorStatus.data, { enabled: false, pending: false });
+  const setup = await fetch(`${baseUrl}/api/auth/2fa/setup`, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: baseUrl },
+  }).then((response) => response.json());
+  assert.equal(setup.ok, true);
+  const totpCode = generateTotpCode(setup.data.secret);
+  const enabled = await fetch(`${baseUrl}/api/auth/2fa/enable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: baseUrl },
+    body: JSON.stringify({ code: totpCode }),
+  }).then((response) => response.json());
+  assert.deepEqual(enabled.data, { enabled: true, pending: false });
+  await fetch(`${baseUrl}/api/auth/logout`, { method: "POST", headers: { Cookie: cookie, Origin: baseUrl } });
+  const challenge = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({ password: "http-test-password" }),
+  });
+  assert.equal(challenge.status, 401);
+  assert.equal((await challenge.json()).error.code, "TWO_FACTOR_REQUIRED");
+  const secondFactorLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({ password: "http-test-password", totp: generateTotpCode(setup.data.secret) }),
+  });
+  assert.equal(secondFactorLogin.status, 200);
+  const secondFactorCookie = secondFactorLogin.headers.get("set-cookie").split(";", 1)[0];
   for (const name of ["Primary Codex", "Backup Codex"]) {
     const options = name === "Primary Codex"
       ? { subscriptionGroupMode: "auto", publicSubscriberPreviewEnabled: false }
       : {};
     const created = await fetch(`${baseUrl}/api/monitors`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: cookie, Origin: baseUrl },
+      headers: { "Content-Type": "application/json", Cookie: secondFactorCookie, Origin: baseUrl },
       body: JSON.stringify({ name, ...options }),
     });
     assert.equal(created.status, 201);
@@ -90,7 +120,7 @@ test("public monitoring stays anonymous and sanitized while management requires 
     assert.equal(serialized.includes(sensitiveField), false, `${sensitiveField} leaked into public dashboard`);
   }
 
-  const admin = await fetch(`${baseUrl}/api/dashboard`, { headers: { Cookie: cookie } });
+  const admin = await fetch(`${baseUrl}/api/dashboard`, { headers: { Cookie: secondFactorCookie } });
   assert.equal(admin.status, 200);
   assert.equal((await admin.json()).data.monitors.length, 2);
 });
