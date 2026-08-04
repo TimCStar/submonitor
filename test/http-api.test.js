@@ -68,19 +68,23 @@ test("public monitoring stays anonymous and sanitized while management requires 
   assert.equal(login.status, 200);
   const cookie = login.headers.get("set-cookie").split(";", 1)[0];
   for (const name of ["Primary Codex", "Backup Codex"]) {
+    const options = name === "Primary Codex"
+      ? { subscriptionGroupMode: "auto", publicSubscriberPreviewEnabled: false }
+      : {};
     const created = await fetch(`${baseUrl}/api/monitors`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: cookie, Origin: baseUrl },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...options }),
     });
     assert.equal(created.status, 201);
   }
 
   const publicPayload = await fetch(`${baseUrl}/api/public/dashboard`).then((response) => response.json());
   assert.equal(publicPayload.data.monitors.length, 2);
+  assert.equal(publicPayload.data.monitors[0].publicSubscriberPreviewEnabled, false);
   const publicSubscribers = await fetch(`${baseUrl}/api/public/monitors/${publicPayload.data.monitors[0].id}/subscribers`);
   assert.equal(publicSubscribers.status, 200);
-  assert.deepEqual((await publicSubscribers.json()).data.subscribers, []);
+  assert.equal((await publicSubscribers.json()).data.enabled, false);
   const serialized = JSON.stringify(publicPayload);
   for (const sensitiveField of ["baseUrl", "authSecret", "authSecretCipher", "targetAccountIds", "subscriptionGroupIds"]) {
     assert.equal(serialized.includes(sensitiveField), false, `${sensitiveField} leaked into public dashboard`);

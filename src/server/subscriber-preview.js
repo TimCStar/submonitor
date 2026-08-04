@@ -110,6 +110,7 @@ export async function buildSubscriberPreview(client, config, maximumItems = 1000
 
 export function toPublicSubscriberPreview(preview) {
   return {
+    enabled: true,
     resetWindows: preview.resetWindows,
     groupCount: preview.groups?.length || 0,
     total: preview.total,

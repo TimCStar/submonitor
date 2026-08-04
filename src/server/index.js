@@ -149,6 +149,7 @@ function publicDashboard() {
     enabled: monitor.enabled,
     targetAccountCount: monitor.targetAccountIds.length,
     subscriptionGroupMode: monitor.subscriptionGroupMode,
+    publicSubscriberPreviewEnabled: monitor.publicSubscriberPreviewEnabled !== false,
     runtime: publicRuntime(schedulers.snapshot(monitor.id)),
     candidates: candidateSummary(monitor.id),
     snapshots: database.listSnapshots(monitor.id, 240),
@@ -197,6 +198,17 @@ async function apiRoute(request, response, url) {
     const monitorId = decodeURIComponent(publicSubscriberMatch[1]);
     const monitor = configStore.listPublic().find((item) => item.id === monitorId);
     if (!monitor) return sendError(response, 404, "Monitor not found", "NOT_FOUND");
+    if (monitor.publicSubscriberPreviewEnabled === false) {
+      return sendData(response, {
+        enabled: false,
+        resetWindows: [],
+        groupCount: 0,
+        total: 0,
+        truncated: false,
+        generatedAt: new Date().toISOString(),
+        subscribers: [],
+      });
+    }
     return sendData(response, toPublicSubscriberPreview(await subscriberPreview(monitorId)));
   }
   if (request.method === "GET" && url.pathname === "/api/auth/session") {

@@ -122,6 +122,7 @@ export class ConfigStore {
         "subscriptionResetWindows",
         RESET_WINDOWS,
       ),
+      publicSubscriberPreviewEnabled: Boolean(input.publicSubscriberPreviewEnabled ?? current.publicSubscriberPreviewEnabled ?? true),
       dryRun: Boolean(input.dryRun),
       enabled: Boolean(input.enabled),
     };

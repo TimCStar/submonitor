@@ -17,6 +17,7 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   subscriptionGroupMode: "none",
   subscriptionGroupIds: [],
   subscriptionResetWindows: ["weekly"],
+  publicSubscriberPreviewEnabled: true,
   dryRun: true,
   enabled: false,
 });

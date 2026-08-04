@@ -425,6 +425,8 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 .mode-section { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-left: 238px; }
 .mode-section > div { display: grid; gap: 6px; }
 .mode-section small { padding-left: 51px; color: var(--muted); font-size: 10px; }
+.setting-toggle { display: grid; gap: 6px; }
+.setting-toggle small { padding-left: 51px; color: var(--muted); font-size: 10px; }
 .toggle { width: fit-content; display: flex; align-items: center; gap: 9px; border: 0; padding: 0; color: #4b5563; background: transparent; }
 .toggle > span { width: 42px; height: 24px; position: relative; border: 1px solid #d1d5db; border-radius: 999px; background: #e5e7eb; transition: .15s; }
 .toggle > span::after { content: ""; width: 18px; height: 18px; position: absolute; left: 2px; top: 2px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); transition: .15s; }

@@ -24,6 +24,7 @@ function validConfig(overrides = {}) {
     subscriptionGroupMode: "none",
     subscriptionGroupIds: [],
     subscriptionResetWindows: ["weekly"],
+    publicSubscriberPreviewEnabled: true,
     dryRun: true,
     enabled: false,
     ...overrides,
@@ -43,6 +44,7 @@ test("credentials stay encrypted and identity changes cancel pending events", (t
 
   const publicConfig = store.getPublic(created.id);
   assert.equal(publicConfig.authSecretConfigured, true);
+  assert.equal(publicConfig.publicSubscriberPreviewEnabled, true);
   assert.equal(Object.hasOwn(publicConfig, "authSecret"), false);
   assert.equal(Object.hasOwn(publicConfig, "authSecretCipher"), false);
   assert.notEqual(database.getMonitor(created.id).authSecretCipher, "administrator-secret");
@@ -122,4 +124,19 @@ test("a changed master key marks credentials invalid and allows replacement", (t
   replacementStore.update(monitor.id, { ...invalid, authSecret: "new-api-key" });
   assert.equal(replacementStore.getPublic(monitor.id).authSecretInvalid, false);
   assert.equal(replacementStore.getPrivate(monitor.id).authSecret, "new-api-key");
+});
+
+test("public subscriber visibility can be disabled without changing subscription cascade", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-public-subs-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("public-subscriber-test-master-key-32-chars"));
+  const monitor = store.create(validConfig({ subscriptionGroupMode: "auto", publicSubscriberPreviewEnabled: false }));
+
+  assert.equal(monitor.subscriptionGroupMode, "auto");
+  assert.equal(monitor.publicSubscriberPreviewEnabled, false);
+  assert.equal(store.getPrivate(monitor.id).publicSubscriberPreviewEnabled, false);
 });
