@@ -503,6 +503,7 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
   .sidebar { width: 100%; height: 68px; inset: auto 0 0; flex-direction: row; align-items: center; padding: 7px 8px; border: solid var(--line); border-width: 1px 0 0; box-shadow: 0 -8px 24px rgba(15, 23, 42, .06); }
   .sidebar-brand, .logout-button { display: none; }
   .sidebar nav { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 0; }
+  .sidebar nav.guest-nav { width: min(100%, 280px); grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: auto; margin-right: auto; }
   .sidebar nav::before { display: none; }
   .sidebar nav button { height: 54px; justify-content: center; flex-direction: column; gap: 3px; padding: 3px; border-radius: 9px; font-size: 9px; }
   .sidebar nav button.active { background: var(--teal-soft); }
