@@ -98,3 +98,28 @@ test("multiple monitors keep credentials, state and history isolated", (t) => {
   assert.equal(store.getPublic(second.id).name, "Second");
   assert.equal(database.getMonitorState(second.id).windows["7d"].marker, "second");
 });
+
+test("a changed master key marks credentials invalid and allows replacement", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-key-change-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const originalStore = new ConfigStore(database, createSecretBox("original-master-key-with-at-least-32-characters"));
+  const monitor = originalStore.create(validConfig({ authSecret: "old-api-key" }));
+  const replacementStore = new ConfigStore(database, createSecretBox("replacement-master-key-with-at-least-32-chars"));
+
+  const invalid = replacementStore.getPublic(monitor.id);
+  assert.equal(invalid.authSecretConfigured, true);
+  assert.equal(invalid.authSecretInvalid, true);
+  assert.throws(() => replacementStore.getPrivate(monitor.id), /无法解密已保存的 Sub2API 凭据/);
+  assert.throws(
+    () => replacementStore.update(monitor.id, { ...invalid, authSecret: "" }),
+    /重新输入 API Key\/JWT/,
+  );
+
+  replacementStore.update(monitor.id, { ...invalid, authSecret: "new-api-key" });
+  assert.equal(replacementStore.getPublic(monitor.id).authSecretInvalid, false);
+  assert.equal(replacementStore.getPrivate(monitor.id).authSecret, "new-api-key");
+});

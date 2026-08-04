@@ -416,6 +416,8 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 .field { min-width: 0; display: grid; align-content: start; gap: 7px; }
 .field.wide { grid-column: span 2; }
 .field em { margin-left: 5px; color: var(--teal-dark); font-size: 10px; font-style: normal; }
+.field em.invalid { color: var(--red); }
+.field-warning { display: flex; align-items: center; gap: 6px; color: var(--red); font-size: 11px; font-weight: 550; }
 .segmented { width: fit-content; max-width: 100%; display: flex; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; padding: 3px; background: #f3f4f6; }
 .segmented button { min-width: 64px; height: 34px; border: 0; border-radius: 7px; padding: 0 11px; color: var(--muted); background: transparent; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .segmented button:hover { color: #374151; }

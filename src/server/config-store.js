@@ -57,7 +57,19 @@ export class ConfigStore {
   toPublic(config) {
     if (!config) return null;
     const { authSecretCipher, ...safe } = config;
-    return { ...safe, authSecretConfigured: Boolean(authSecretCipher) };
+    let authSecretInvalid = false;
+    if (authSecretCipher) {
+      try {
+        this.secretBox.decrypt(authSecretCipher);
+      } catch {
+        authSecretInvalid = true;
+      }
+    }
+    return {
+      ...safe,
+      authSecretConfigured: Boolean(authSecretCipher),
+      authSecretInvalid,
+    };
   }
 
   listPublic() {
@@ -117,6 +129,7 @@ export class ConfigStore {
       next.authSecretCipher = this.secretBox.encrypt(String(input.authSecret));
     }
     if (input.clearAuthSecret === true) next.authSecretCipher = "";
+    if (next.authSecretCipher) this.secretBox.decrypt(next.authSecretCipher);
     if (next.enabled && (!next.baseUrl || !next.sourceAccountId || !next.authSecretCipher)) {
       throw new Error("baseUrl, sourceAccountId and an administrator credential are required before enabling monitoring");
     }
