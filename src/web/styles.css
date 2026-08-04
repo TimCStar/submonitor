@@ -413,6 +413,7 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 .form-section-title > div { display: grid; gap: 4px; }
 .form-section-title span { color: var(--muted); font-size: 10px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 14px; }
+.subscription-config { min-width: 0; display: grid; gap: 21px; }
 .field { min-width: 0; display: grid; align-content: start; gap: 7px; }
 .field.wide { grid-column: span 2; }
 .field em { margin-left: 5px; color: var(--teal-dark); font-size: 10px; font-style: normal; }
@@ -432,6 +433,28 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 .toggle.on > span { border-color: var(--teal-hover); background: var(--teal-hover); }
 .toggle.on > span::after { transform: translateX(18px); }
 .toggle strong { font-size: 12px; }
+
+.subscriber-preview { min-width: 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.subscriber-preview-head { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.subscriber-preview-head > div { min-width: 0; display: grid; gap: 3px; }
+.subscriber-preview-head strong { font-size: 12px; }
+.subscriber-preview-head small { color: var(--muted); font-size: 10px; }
+.subscriber-message { min-height: 78px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--faint); font-size: 11px; }
+.subscriber-message.error { color: var(--red); }
+.subscriber-message .text-button { margin-left: 5px; }
+.subscriber-list { max-height: 360px; margin-top: 8px; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--line); border-radius: 11px; background: #fcfdfd; }
+.subscriber-row { min-height: 55px; display: grid; grid-template-columns: 32px minmax(150px, 1fr) minmax(100px, auto) 54px; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.subscriber-row:last-child { border-bottom: 0; }
+.subscriber-avatar { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: var(--teal-dark); background: #ccfbf1; font-size: 11px; font-weight: 750; }
+.subscriber-identity { min-width: 0; display: grid; gap: 3px; }
+.subscriber-identity small { color: var(--muted); font-size: 9px; }
+.masked-identity { min-width: 0; display: flex; align-items: baseline; color: #374151; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.masked-fragment { display: inline-block; padding: 0 2px; color: #94a3b8; filter: blur(2.2px); user-select: none; }
+.masked-identity > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.subscriber-group { overflow: hidden; border-radius: 999px; padding: 4px 8px; color: var(--teal-dark); background: var(--teal-soft); font-size: 9px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.subscriber-status { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; color: #047857; font-size: 9px; font-weight: 650; white-space: nowrap; }
+.subscriber-status i { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+.subscriber-limit { padding: 9px 12px; color: var(--amber); background: var(--amber-soft); font-size: 10px; text-align: center; }
 
 .drawer-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: flex-end; background: rgba(17, 24, 39, .38); backdrop-filter: blur(2px); }
 .drawer { width: min(100%, 520px); height: 100%; overflow-y: auto; padding: 26px; background: var(--surface); box-shadow: -16px 0 40px rgba(15, 23, 42, .15); }
@@ -496,6 +519,9 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
   .form-grid { grid-template-columns: 1fr; }
   .field.wide { grid-column: auto; }
   .mode-section { grid-template-columns: 1fr; padding-left: 18px; }
+  .subscriber-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .subscriber-group { grid-column: 2; grid-row: 2; width: fit-content; max-width: 100%; }
+  .subscriber-status { grid-column: 3; grid-row: 1 / span 2; }
   .settings-form > .page-title-row { align-items: flex-start; }
   .button-row { width: 100%; }
   .button-row .button { flex: 1 1 120px; }

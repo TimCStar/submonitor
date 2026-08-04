@@ -11,6 +11,7 @@ import { SchedulerManager } from "./scheduler.js";
 import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
 import { Sub2ApiClient } from "./sub2api-client.js";
+import { buildSubscriberPreview } from "./subscriber-preview.js";
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(serverDirectory, "../..");
@@ -146,7 +147,7 @@ function adminDashboard() {
 }
 
 function monitorRoute(pathname) {
-  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check))?$/);
+  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check|subscribers))?$/);
   return match ? { id: decodeURIComponent(match[1]), action: match[2] || null } : null;
 }
 
@@ -240,6 +241,11 @@ async function apiRoute(request, response, url) {
   }
   if (route && request.method === "POST" && route.action === "check") {
     return sendData(response, await schedulers.runNow(route.id, "manual"));
+  }
+  if (route && request.method === "GET" && route.action === "subscribers") {
+    const config = configStore.getPrivate(route.id);
+    if (!configStore.isRunnable(config)) throw new Error("Save a complete connection configuration first");
+    return sendData(response, await buildSubscriberPreview(new Sub2ApiClient(config), config));
   }
   if (request.method === "GET" && url.pathname === "/api/events") {
     const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));

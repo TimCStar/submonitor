@@ -1,4 +1,5 @@
 import { Sub2ApiClient } from "./sub2api-client.js";
+import { discoverSubscriptionGroupIds, listActiveSubscriptions } from "./subscriber-preview.js";
 
 const FIVE_HOURS_SECONDS = 5 * 60 * 60;
 const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
@@ -107,13 +108,6 @@ function createEvent(config, selector, pending, current) {
       subscriptions: {},
     },
   };
-}
-
-function subscriptionIsActive(subscription) {
-  if (!subscription || subscription.status !== "active") return false;
-  if (!subscription.expires_at) return true;
-  const expiresAt = Date.parse(subscription.expires_at);
-  return !Number.isFinite(expiresAt) || expiresAt > Date.now();
 }
 
 function subscriptionResetBody(event) {
@@ -251,33 +245,15 @@ export class MonitorEngine {
   }
 
   async discoverGroupIds(client, event) {
-    if (event.plan.subscriptionGroupMode === "none") return [];
-    if (event.plan.subscriptionGroupMode === "explicit") return event.plan.subscriptionGroupIds;
-    const [account, groups] = await Promise.all([
-      client.getAccount(event.sourceAccountId),
-      client.listGroups(),
-    ]);
-    const sourceGroupIds = new Set((account.group_ids || []).map(Number));
-    return (groups || [])
-      .filter((group) =>
-        sourceGroupIds.has(Number(group.id)) &&
-        group.subscription_type === "subscription" &&
-        group.status === "active")
-      .map((group) => Number(group.id));
+    return discoverSubscriptionGroupIds(client, {
+      sourceAccountId: event.sourceAccountId,
+      subscriptionGroupMode: event.plan.subscriptionGroupMode,
+      subscriptionGroupIds: event.plan.subscriptionGroupIds,
+    });
   }
 
   async listActiveSubscriptions(client, groupId) {
-    const subscriptions = [];
-    let page = 1;
-    for (;;) {
-      const result = await client.listSubscriptions(groupId, page);
-      const items = Array.isArray(result?.items) ? result.items : [];
-      subscriptions.push(...items.filter(subscriptionIsActive));
-      const pages = Number(result?.pages) || 1;
-      if (page >= pages) break;
-      page += 1;
-    }
-    return subscriptions;
+    return listActiveSubscriptions(client, groupId);
   }
 
   async prepareSubscriptionActions(client, event) {

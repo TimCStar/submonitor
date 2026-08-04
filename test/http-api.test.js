@@ -58,6 +58,7 @@ test("public monitoring stays anonymous and sanitized while management requires 
   assert.equal(anonymous.status, 200);
   assert.deepEqual((await anonymous.json()).data.monitors, []);
   assert.equal((await fetch(`${baseUrl}/api/dashboard`)).status, 401);
+  assert.equal((await fetch(`${baseUrl}/api/monitors/missing/subscribers`)).status, 401);
 
   const login = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",

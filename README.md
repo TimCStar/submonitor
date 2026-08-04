@@ -12,6 +12,7 @@ SubMonitor 是面向 Sub2API 的 Codex OAuth 额度周期监控和自动恢复�
 
 - 无需登录的公开监控页；配置与审计后台单独登录
 - 支持多个独立 Codex OAuth 监控任务，每个任务拥有独立 Sub2API 凭据、源账号、目标账号和订阅规则
+- 后台展示订阅分组中的有效用户，邮箱和用户名在服务端脱敏后再传给浏览器
 - Sub2API 风格的响应式 React 控制台和 Node.js 后台服务
 - `5h`、`7d`、`primary`、`secondary` 额度窗口
 - 以 `reset_at` 周期推进为主要判据

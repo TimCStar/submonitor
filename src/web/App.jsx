@@ -246,6 +246,58 @@ function numberList(value) {
   return [...new Set(parsed)];
 }
 
+function MaskedIdentity({ identity }) {
+  if (!identity) return <span>--</span>;
+  return <span className="masked-identity" title="用户信息已脱敏">
+    <span>{identity.prefix}{identity.leading}</span>
+    {identity.obscured && <span className="masked-fragment" aria-hidden="true">••••</span>}
+    <span>{identity.trailing}{identity.suffix}</span>
+  </span>;
+}
+
+function SubscriberPreview({ monitor, visible }) {
+  const [state, setState] = useState({ loading: false, data: null, error: "" });
+  const savedEnabled = monitor.subscriptionGroupMode !== "none";
+  const ready = Boolean(monitor.baseUrl && monitor.sourceAccountId && monitor.authSecretConfigured && !monitor.authSecretInvalid);
+  const load = useCallback(async () => {
+    if (!savedEnabled || !ready) return;
+    setState((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const data = await api.subscribers(monitor.id);
+      setState({ loading: false, data, error: "" });
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: error.message }));
+    }
+  }, [monitor.id, ready, savedEnabled]);
+  useEffect(() => {
+    if (savedEnabled && ready) void load();
+    else setState({ loading: false, data: null, error: "" });
+  }, [load, monitor.updatedAt, ready, savedEnabled]);
+  if (!visible) return null;
+
+  const data = state.data;
+  return <div className="subscriber-preview">
+    <div className="subscriber-preview-head">
+      <div><strong>订阅用户</strong><small>{data ? `${data.total} 位有效用户 · ${data.groups.length} 个分组` : "有效订阅"}</small></div>
+      <button type="button" className="icon-button small" onClick={load} disabled={!savedEnabled || !ready || state.loading} title="刷新订阅用户"><RefreshCw className={state.loading ? "spin" : ""} size={16} /></button>
+    </div>
+    {!savedEnabled && <div className="subscriber-message"><UsersRound size={19} /><span>保存配置后显示订阅用户</span></div>}
+    {savedEnabled && !ready && <div className="subscriber-message"><AlertCircle size={19} /><span>连接配置完整后显示订阅用户</span></div>}
+    {state.error && <div className="subscriber-message error"><AlertCircle size={19} /><span>{state.error}</span><button type="button" className="text-button" onClick={load}>重试</button></div>}
+    {state.loading && !data && <div className="subscriber-message"><LoaderCircle className="spin" size={19} /><span>正在读取订阅用户</span></div>}
+    {!state.loading && !state.error && data && !data.subscribers.length && <div className="subscriber-message"><UsersRound size={19} /><span>分组中暂无有效订阅用户</span></div>}
+    {data?.subscribers?.length > 0 && <div className="subscriber-list" role="list">
+      {data.subscribers.map((subscriber, index) => <div className="subscriber-row" role="listitem" key={`${subscriber.groupId}-${index}`}>
+        <span className="subscriber-avatar">{subscriber.identity?.leading?.toUpperCase() || "#"}</span>
+        <div className="subscriber-identity"><MaskedIdentity identity={subscriber.identity} /><small>{subscriber.expiresAt ? `到期 ${formatDate(subscriber.expiresAt)}` : "长期有效"}</small></div>
+        <span className="subscriber-group">{subscriber.groupName || `分组 #${subscriber.groupId}`}</span>
+        <span className="subscriber-status"><i />有效</span>
+      </div>)}
+      {data.truncated && <div className="subscriber-limit">仅显示前 {data.subscribers.length} 位用户</div>}
+    </div>}
+  </div>;
+}
+
 function MonitorForm({ monitor, onSaved, onDeleted, notify }) {
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState("");
@@ -283,7 +335,7 @@ function MonitorForm({ monitor, onSaved, onDeleted, notify }) {
     <div className="page-title-row"><div><span className="eyebrow">MONITOR CONFIG</span><h2>{monitor.name}</h2></div><div className="button-row"><button type="button" className="icon-button danger" onClick={remove} disabled={busy} title="删除任务"><Trash2 size={17} /></button><button type="button" className="button secondary" onClick={test} disabled={busy || !monitor.authSecretConfigured || monitor.authSecretInvalid}>{busy === "test" ? <LoaderCircle className="spin" size={17} /> : <Activity size={17} />}测试连接</button><button type="button" className="button secondary" onClick={check} disabled={busy || !monitor.authSecretConfigured || monitor.authSecretInvalid}>{busy === "check" ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}立即检查</button><button className="button primary" disabled={busy}>{busy === "save" ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}保存</button></div></div>
     <section className="form-section"><div className="form-section-title"><ServerCog size={19} /><div><h3>Sub2API 连接</h3><span>任务独立凭据</span></div></div><div className="form-grid"><label className="field wide"><span>任务名称</span><input value={form.name} maxLength="80" onChange={(e) => update("name", e.target.value)} /></label><label className="field wide"><span>服务地址</span><input type="url" value={form.baseUrl} onChange={(e) => update("baseUrl", e.target.value)} placeholder="https://sub2api.example.com" /></label><label className="field"><span>认证方式</span><select value={form.authType} onChange={(e) => update("authType", e.target.value)}><option value="apiKey">API Key</option><option value="jwt">管理员 JWT</option></select></label><label className="field wide"><span>管理凭据 {monitor.authSecretConfigured && <em className={monitor.authSecretInvalid ? "invalid" : ""}>{monitor.authSecretInvalid ? "需要重新输入" : "已保存"}</em>}</span><input type="password" value={form.authSecret} onChange={(e) => update("authSecret", e.target.value)} placeholder={monitor.authSecretInvalid ? "重新输入 API Key 或 JWT" : monitor.authSecretConfigured ? "留空保持不变" : "输入管理凭据"} autoComplete="new-password" />{monitor.authSecretInvalid && <small className="field-warning"><AlertCircle size={14} />当前主密钥无法解密此凭据，请重新输入并保存</small>}</label></div></section>
     <section className="form-section"><div className="form-section-title"><CircleGauge size={19} /><div><h3>额度监控</h3><span>Codex OAuth</span></div></div><div className="form-grid"><label className="field"><span>源账号 ID</span><input type="number" min="1" value={form.sourceAccountId || ""} onChange={(e) => update("sourceAccountId", e.target.value)} /></label><label className="field wide"><span>目标账号 ID</span><input value={form.targetAccountIdsText} onChange={(e) => update("targetAccountIdsText", e.target.value)} placeholder="34, 35" /></label><div className="field wide"><span>监控窗口</span><ChoiceButtons values={["5h", "7d", "primary", "secondary"]} selected={form.monitorWindows} onChange={(value) => update("monitorWindows", value)} /></div><label className="field"><span>轮询间隔（秒）</span><input type="number" min="15" value={form.pollIntervalSeconds} onChange={(e) => update("pollIntervalSeconds", e.target.value)} /></label><label className="field"><span>连续确认次数</span><input type="number" min="1" max="10" value={form.confirmationsRequired} onChange={(e) => update("confirmationsRequired", e.target.value)} /></label><label className="field"><span>请求超时（秒）</span><input type="number" min="5" value={form.requestTimeoutSeconds} onChange={(e) => update("requestTimeoutSeconds", e.target.value)} /></label><label className="field"><span>周期容差（秒）</span><input type="number" min="1" value={form.resetGraceSeconds} onChange={(e) => update("resetGraceSeconds", e.target.value)} /></label></div></section>
-    <section className="form-section"><div className="form-section-title"><UsersRound size={19} /><div><h3>订阅级联</h3><span>有效用户订阅</span></div></div><div className="form-grid"><label className="field"><span>分组来源</span><select value={form.subscriptionGroupMode} onChange={(e) => update("subscriptionGroupMode", e.target.value)}><option value="none">关闭</option><option value="auto">源账号自动发现</option><option value="explicit">指定分组</option></select></label>{form.subscriptionGroupMode === "explicit" && <label className="field wide"><span>订阅分组 ID</span><input value={form.subscriptionGroupIdsText} onChange={(e) => update("subscriptionGroupIdsText", e.target.value)} placeholder="10, 11" /></label>}<div className="field wide"><span>重置周期</span><ChoiceButtons values={["daily", "weekly", "monthly"]} selected={form.subscriptionResetWindows} onChange={(value) => update("subscriptionResetWindows", value)} /></div></div></section>
+    <section className="form-section"><div className="form-section-title"><UsersRound size={19} /><div><h3>订阅级联</h3><span>有效用户订阅</span></div></div><div className="subscription-config"><div className="form-grid"><label className="field"><span>分组来源</span><select value={form.subscriptionGroupMode} onChange={(e) => update("subscriptionGroupMode", e.target.value)}><option value="none">关闭</option><option value="auto">源账号自动发现</option><option value="explicit">指定分组</option></select></label>{form.subscriptionGroupMode === "explicit" && <label className="field wide"><span>订阅分组 ID</span><input value={form.subscriptionGroupIdsText} onChange={(e) => update("subscriptionGroupIdsText", e.target.value)} placeholder="10, 11" /></label>}<div className="field wide"><span>重置周期</span><ChoiceButtons values={["daily", "weekly", "monthly"]} selected={form.subscriptionResetWindows} onChange={(value) => update("subscriptionResetWindows", value)} /></div></div><SubscriberPreview monitor={monitor} visible={form.subscriptionGroupMode !== "none"} /></div></section>
     <section className="form-section mode-section"><div><Toggle checked={form.dryRun} onChange={(value) => update("dryRun", value)} label="预览模式" /><small>确认事件不执行写操作</small></div><div><Toggle checked={form.enabled} onChange={(value) => update("enabled", value)} label="启用监控" /><small>后台按轮询间隔运行</small></div></section>
   </form>;
 }

@@ -27,6 +27,7 @@ export const api = {
   deleteMonitor: (id) => request(`/api/monitors/${encodeURIComponent(id)}`, { method: "DELETE" }),
   testConnection: (id) => request(`/api/monitors/${encodeURIComponent(id)}/test`, { method: "POST" }),
   checkNow: (id) => request(`/api/monitors/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  subscribers: (id) => request(`/api/monitors/${encodeURIComponent(id)}/subscribers`),
   events: () => request("/api/events?limit=200"),
   audit: () => request("/api/audit?limit=300"),
 };
