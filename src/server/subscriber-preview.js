@@ -58,7 +58,21 @@ export function maskSubscriberIdentity(subscription) {
   return { kind: "id", ...maskCore(subscription?.user_id, "#") };
 }
 
+function usageMetric(subscription, window) {
+  const used = Number(subscription?.[`${window}_usage_usd`]);
+  const limit = Number(subscription?.group?.[`${window}_limit_usd`]);
+  if (!Number.isFinite(used)) return null;
+  return {
+    used,
+    limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+    percentage: Number.isFinite(limit) && limit > 0
+      ? Math.round((used / limit) * 1000) / 10
+      : null,
+  };
+}
+
 export async function buildSubscriberPreview(client, config, maximumItems = 1000) {
+  const resetWindows = config.subscriptionResetWindows || ["weekly"];
   const groupIds = await discoverSubscriptionGroupIds(client, config);
   const batches = await Promise.all(groupIds.map(async (groupId) => ({
     groupId,
@@ -77,13 +91,36 @@ export async function buildSubscriberPreview(client, config, maximumItems = 1000
         groupName: subscription.group?.name || null,
         status: subscription.status,
         expiresAt: subscription.expires_at || null,
+        usage: Object.fromEntries(
+          resetWindows
+            .map((window) => [window, usageMetric(subscription, window)])
+            .filter(([, metric]) => metric),
+        ),
       });
     }
   }
   return {
     groups: groupIds,
+    resetWindows,
     total: subscribers.length,
     truncated: subscribers.length > maximumItems,
     subscribers: subscribers.slice(0, maximumItems),
+  };
+}
+
+export function toPublicSubscriberPreview(preview) {
+  return {
+    resetWindows: preview.resetWindows,
+    groupCount: preview.groups?.length || 0,
+    total: preview.total,
+    truncated: preview.truncated,
+    generatedAt: preview.generatedAt,
+    subscribers: preview.subscribers.map((subscriber) => ({
+      identity: subscriber.identity,
+      groupName: subscriber.groupName,
+      status: subscriber.status,
+      expiresAt: subscriber.expiresAt,
+      usage: subscriber.usage,
+    })),
   };
 }

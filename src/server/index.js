@@ -11,7 +11,7 @@ import { SchedulerManager } from "./scheduler.js";
 import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
 import { Sub2ApiClient } from "./sub2api-client.js";
-import { buildSubscriberPreview } from "./subscriber-preview.js";
+import { buildSubscriberPreview, toPublicSubscriberPreview } from "./subscriber-preview.js";
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(serverDirectory, "../..");
@@ -50,6 +50,32 @@ function emitUpdate(type, payload) {
 }
 
 const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate });
+const subscriberPreviewCache = new Map();
+const subscriberPreviewTtlMs = 5 * 60 * 1000;
+
+async function subscriberPreview(monitorId, force = false) {
+  const now = Date.now();
+  const cached = subscriberPreviewCache.get(monitorId);
+  if (!force && cached?.data && cached.expiresAt > now) return cached.data;
+  if (cached?.promise) return cached.promise;
+  const promise = (async () => {
+    const config = configStore.getPrivate(monitorId);
+    if (config.subscriptionGroupMode !== "none" && !configStore.isRunnable(config)) {
+      throw new Error("Save a complete connection configuration first");
+    }
+    const data = await buildSubscriberPreview(new Sub2ApiClient(config), config);
+    return { ...data, generatedAt: new Date().toISOString() };
+  })();
+  subscriberPreviewCache.set(monitorId, { ...cached, promise });
+  try {
+    const data = await promise;
+    subscriberPreviewCache.set(monitorId, { data, expiresAt: Date.now() + subscriberPreviewTtlMs });
+    return data;
+  } catch (error) {
+    subscriberPreviewCache.delete(monitorId);
+    throw error;
+  }
+}
 
 function actionSummary(event) {
   const actions = [
@@ -166,6 +192,13 @@ async function apiRoute(request, response, url) {
     publicBroker.connect(request, response);
     return;
   }
+  const publicSubscriberMatch = url.pathname.match(/^\/api\/public\/monitors\/([^/]+)\/subscribers$/);
+  if (request.method === "GET" && publicSubscriberMatch) {
+    const monitorId = decodeURIComponent(publicSubscriberMatch[1]);
+    const monitor = configStore.listPublic().find((item) => item.id === monitorId);
+    if (!monitor) return sendError(response, 404, "Monitor not found", "NOT_FOUND");
+    return sendData(response, toPublicSubscriberPreview(await subscriberPreview(monitorId)));
+  }
   if (request.method === "GET" && url.pathname === "/api/auth/session") {
     return sendData(response, { authenticated: auth.isAuthenticated(request) });
   }
@@ -209,6 +242,7 @@ async function apiRoute(request, response, url) {
   const route = monitorRoute(url.pathname);
   if (route && request.method === "PUT" && !route.action) {
     const result = configStore.update(route.id, await readJson(request));
+    subscriberPreviewCache.delete(route.id);
     schedulers.configChanged(route.id);
     database.addAudit("info", "monitor.updated", "Monitor configuration updated", {
       monitorId: route.id,
@@ -224,6 +258,7 @@ async function apiRoute(request, response, url) {
     const monitor = configStore.getPublic(route.id);
     schedulers.remove(route.id);
     configStore.delete(route.id);
+    subscriberPreviewCache.delete(route.id);
     database.addAudit("warn", "monitor.deleted", "Monitor deleted", { monitorId: route.id, name: monitor.name });
     emitUpdate("config", { monitorId: route.id, data: null });
     return sendData(response, { deleted: true });
@@ -243,9 +278,7 @@ async function apiRoute(request, response, url) {
     return sendData(response, await schedulers.runNow(route.id, "manual"));
   }
   if (route && request.method === "GET" && route.action === "subscribers") {
-    const config = configStore.getPrivate(route.id);
-    if (!configStore.isRunnable(config)) throw new Error("Save a complete connection configuration first");
-    return sendData(response, await buildSubscriberPreview(new Sub2ApiClient(config), config));
+    return sendData(response, await subscriberPreview(route.id, url.searchParams.get("refresh") === "1"));
   }
   if (request.method === "GET" && url.pathname === "/api/events") {
     const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));

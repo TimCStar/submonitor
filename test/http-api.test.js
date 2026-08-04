@@ -78,6 +78,9 @@ test("public monitoring stays anonymous and sanitized while management requires 
 
   const publicPayload = await fetch(`${baseUrl}/api/public/dashboard`).then((response) => response.json());
   assert.equal(publicPayload.data.monitors.length, 2);
+  const publicSubscribers = await fetch(`${baseUrl}/api/public/monitors/${publicPayload.data.monitors[0].id}/subscribers`);
+  assert.equal(publicSubscribers.status, 200);
+  assert.deepEqual((await publicSubscribers.json()).data.subscribers, []);
   const serialized = JSON.stringify(publicPayload);
   for (const sensitiveField of ["baseUrl", "authSecret", "authSecretCipher", "targetAccountIds", "subscriptionGroupIds"]) {
     assert.equal(serialized.includes(sensitiveField), false, `${sensitiveField} leaked into public dashboard`);

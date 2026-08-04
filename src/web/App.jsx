@@ -136,18 +136,7 @@ function LoginDialog({ open, onClose, onAuthenticated }) {
   );
 }
 
-function Sparkline({ snapshots }) {
-  const values = [...snapshots].reverse().slice(-30);
-  if (values.length < 2) return <div className="sparkline-empty" />;
-  const points = values.map((item, index) => {
-    const x = (index / (values.length - 1)) * 100;
-    const y = 34 - Math.max(0, Math.min(100, item.usedPercent)) * 0.3;
-    return `${x},${y}`;
-  }).join(" ");
-  return <svg className="sparkline" viewBox="0 0 100 38" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="34" x2="100" y2="34" /><polyline points={points} /></svg>;
-}
-
-function QuotaPanel({ selector, snapshot, history, now, candidate }) {
+function QuotaPanel({ selector, snapshot, now, candidate }) {
   const usage = snapshot ? Math.max(0, Math.min(100, snapshot.usedPercent)) : 0;
   return (
     <article className="quota-panel">
@@ -157,7 +146,6 @@ function QuotaPanel({ selector, snapshot, history, now, candidate }) {
       </div>
       <div className="usage-row"><strong>{snapshot ? `${usage.toFixed(1)}%` : "--"}</strong><span>已使用</span></div>
       <div className="progress-track"><span style={{ width: `${usage}%` }} /></div>
-      <Sparkline snapshots={history} />
       <div className="quota-meta"><span><Clock3 size={15} />{snapshot ? formatCountdown(snapshot.resetAt, now) : "--"}</span><span>重置 {formatDate(snapshot?.resetAt)}</span></div>
     </article>
   );
@@ -209,9 +197,10 @@ function Overview({ data, selectedId, onSelectMonitor, onSelectEvent, now, onAdm
     <div className="page-stack">
       <section><div className="section-heading"><div><span className="eyebrow">MONITORS</span><h2>账号监控</h2></div><span className="source-id">{data.monitors.length} 个任务</span></div><MonitorPicker monitors={data.monitors} selectedId={monitor.id} onSelect={onSelectMonitor} /></section>
       <section><div className="section-heading"><div><span className="eyebrow">CODEX OAUTH</span><h2>{monitor.name}</h2></div><div className="monitor-title-meta"><RuntimeBadge monitor={monitor} /><span className="source-id">源账号 #{monitor.sourceAccountId || "--"}</span></div></div>
-        <div className="quota-grid">{monitor.monitorWindows.map((selector) => <QuotaPanel key={selector} selector={selector} snapshot={latest[selector]} history={monitor.snapshots.filter((item) => item.selector === selector)} now={now} candidate={monitor.candidates?.[selector]} />)}</div>
+        <div className="quota-grid">{monitor.monitorWindows.map((selector) => <QuotaPanel key={selector} selector={selector} snapshot={latest[selector]} now={now} candidate={monitor.candidates?.[selector]} />)}</div>
       </section>
       <section className="metrics-band"><div><span>运行模式</span><strong>{monitor.dryRun ? "预览" : "自动执行"}</strong></div><div><span>确认次数</span><strong>{monitor.confirmationsRequired} 次</strong></div><div><span>轮询间隔</span><strong>{monitor.pollIntervalSeconds} 秒</strong></div><div><span>目标账号</span><strong>{monitor.targetAccountCount}</strong></div><div><span>上次检查</span><strong>{formatDate(monitor.runtime.lastPollAt)}</strong></div></section>
+      <PublicSubscriberPreview monitor={monitor} />
       <section><div className="section-heading"><div><span className="eyebrow">AUTOMATION</span><h2>最近事件</h2></div></div><EventTable events={monitorEvents} onSelect={onSelectEvent} compact /></section>
     </div>
   );
@@ -255,22 +244,81 @@ function MaskedIdentity({ identity }) {
   </span>;
 }
 
+const USAGE_WINDOW_TEXT = { daily: "日", weekly: "周", monthly: "月" };
+
+function SubscriberUsage({ usage }) {
+  const entries = Object.entries(usage || {});
+  if (!entries.length) return <span className="subscriber-usage-empty">--</span>;
+  return <div className="subscriber-usage">{entries.map(([window, metric]) => {
+    const percentage = Number.isFinite(metric.percentage) ? metric.percentage : null;
+    const width = percentage === null ? 0 : Math.max(0, Math.min(100, percentage));
+    return <div className="subscriber-usage-row" key={window}>
+      <span>{USAGE_WINDOW_TEXT[window] || window}</span>
+      <div className="subscriber-usage-track"><i style={{ width: `${width}%` }} /></div>
+      <strong>{percentage === null ? "--" : `${percentage.toFixed(1)}%`}</strong>
+    </div>;
+  })}</div>;
+}
+
+function SubscriberList({ data }) {
+  return <div className="subscriber-list" role="list">
+    {data.subscribers.map((subscriber, index) => <div className="subscriber-row" role="listitem" key={`${subscriber.groupId || "public"}-${index}`}>
+      <span className="subscriber-avatar">{subscriber.identity?.leading?.toUpperCase() || "#"}</span>
+      <div className="subscriber-identity"><MaskedIdentity identity={subscriber.identity} /><small>{subscriber.expiresAt ? `到期 ${formatDate(subscriber.expiresAt)}` : "长期有效"}</small></div>
+      <span className="subscriber-group">{subscriber.groupName || (subscriber.groupId ? `分组 #${subscriber.groupId}` : "订阅分组")}</span>
+      <SubscriberUsage usage={subscriber.usage} />
+      <span className="subscriber-status"><i />有效</span>
+    </div>)}
+    {data.truncated && <div className="subscriber-limit">仅显示前 {data.subscribers.length} 位用户</div>}
+  </div>;
+}
+
+function PublicSubscriberPreview({ monitor }) {
+  const [state, setState] = useState({ loading: false, data: null, error: "" });
+  const enabled = monitor.subscriptionGroupMode !== "none";
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    setState((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const data = await api.publicSubscribers(monitor.id);
+      setState({ loading: false, data, error: "" });
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: error.message }));
+    }
+  }, [enabled, monitor.id]);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    void load();
+    const interval = setInterval(() => void load(), 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [enabled, load]);
+  if (!enabled) return null;
+  const data = state.data;
+  return <section className="homepage-subscribers">
+    <div className="section-heading"><div><span className="eyebrow">SUBSCRIPTIONS</span><h2>订阅用户</h2></div>{data && <span className="source-id">{data.total} 位用户 · {data.groupCount} 个分组</span>}</div>
+    {state.loading && !data && <div className="subscriber-home-state"><LoaderCircle className="spin" size={20} /><span>正在读取订阅用户</span></div>}
+    {state.error && !data && <div className="subscriber-home-state error"><AlertCircle size={20} /><span>{state.error}</span></div>}
+    {!state.loading && !state.error && data && !data.subscribers.length && <div className="subscriber-home-state"><UsersRound size={20} /><span>暂无有效订阅用户</span></div>}
+    {data?.subscribers?.length > 0 && <SubscriberList data={data} />}
+  </section>;
+}
+
 function SubscriberPreview({ monitor, visible }) {
   const [state, setState] = useState({ loading: false, data: null, error: "" });
   const savedEnabled = monitor.subscriptionGroupMode !== "none";
   const ready = Boolean(monitor.baseUrl && monitor.sourceAccountId && monitor.authSecretConfigured && !monitor.authSecretInvalid);
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     if (!savedEnabled || !ready) return;
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
-      const data = await api.subscribers(monitor.id);
+      const data = await api.subscribers(monitor.id, refresh);
       setState({ loading: false, data, error: "" });
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: error.message }));
     }
   }, [monitor.id, ready, savedEnabled]);
   useEffect(() => {
-    if (savedEnabled && ready) void load();
+    if (savedEnabled && ready) void load(false);
     else setState({ loading: false, data: null, error: "" });
   }, [load, monitor.updatedAt, ready, savedEnabled]);
   if (!visible) return null;
@@ -279,22 +327,14 @@ function SubscriberPreview({ monitor, visible }) {
   return <div className="subscriber-preview">
     <div className="subscriber-preview-head">
       <div><strong>订阅用户</strong><small>{data ? `${data.total} 位有效用户 · ${data.groups.length} 个分组` : "有效订阅"}</small></div>
-      <button type="button" className="icon-button small" onClick={load} disabled={!savedEnabled || !ready || state.loading} title="刷新订阅用户"><RefreshCw className={state.loading ? "spin" : ""} size={16} /></button>
+      <button type="button" className="icon-button small" onClick={() => load(true)} disabled={!savedEnabled || !ready || state.loading} title="刷新订阅用户"><RefreshCw className={state.loading ? "spin" : ""} size={16} /></button>
     </div>
     {!savedEnabled && <div className="subscriber-message"><UsersRound size={19} /><span>保存配置后显示订阅用户</span></div>}
     {savedEnabled && !ready && <div className="subscriber-message"><AlertCircle size={19} /><span>连接配置完整后显示订阅用户</span></div>}
-    {state.error && <div className="subscriber-message error"><AlertCircle size={19} /><span>{state.error}</span><button type="button" className="text-button" onClick={load}>重试</button></div>}
+    {state.error && <div className="subscriber-message error"><AlertCircle size={19} /><span>{state.error}</span><button type="button" className="text-button" onClick={() => load(true)}>重试</button></div>}
     {state.loading && !data && <div className="subscriber-message"><LoaderCircle className="spin" size={19} /><span>正在读取订阅用户</span></div>}
     {!state.loading && !state.error && data && !data.subscribers.length && <div className="subscriber-message"><UsersRound size={19} /><span>分组中暂无有效订阅用户</span></div>}
-    {data?.subscribers?.length > 0 && <div className="subscriber-list" role="list">
-      {data.subscribers.map((subscriber, index) => <div className="subscriber-row" role="listitem" key={`${subscriber.groupId}-${index}`}>
-        <span className="subscriber-avatar">{subscriber.identity?.leading?.toUpperCase() || "#"}</span>
-        <div className="subscriber-identity"><MaskedIdentity identity={subscriber.identity} /><small>{subscriber.expiresAt ? `到期 ${formatDate(subscriber.expiresAt)}` : "长期有效"}</small></div>
-        <span className="subscriber-group">{subscriber.groupName || `分组 #${subscriber.groupId}`}</span>
-        <span className="subscriber-status"><i />有效</span>
-      </div>)}
-      {data.truncated && <div className="subscriber-limit">仅显示前 {data.subscribers.length} 位用户</div>}
-    </div>}
+    {data?.subscribers?.length > 0 && <SubscriberList data={data} />}
   </div>;
 }
 
