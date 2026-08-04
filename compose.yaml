@@ -1,0 +1,19 @@
+services:
+  submonitor:
+    build: .
+    image: submonitor:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8787:8787"
+    volumes:
+      - submonitor-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  submonitor-data:
