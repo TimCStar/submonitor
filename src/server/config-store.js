@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import { DEFAULT_MONITOR_CONFIG } from "./database.js";
+
 const MONITOR_WINDOWS = new Set(["5h", "7d", "primary", "secondary"]);
 const RESET_WINDOWS = new Set(["daily", "weekly", "monthly"]);
 
@@ -34,9 +37,15 @@ function normalizeBaseUrl(value) {
   const baseUrl = String(value || "").trim().replace(/\/+$/, "");
   if (!baseUrl) return "";
   const parsed = new URL(baseUrl);
-  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("baseUrl must use HTTP or HTTPS");
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("baseUrl must use HTTP or HTTPS");
   if (parsed.username || parsed.password) throw new Error("baseUrl must not contain embedded credentials");
   return baseUrl;
+}
+
+function normalizeName(value) {
+  const name = String(value || "").trim();
+  if (!name || name.length > 80) throw new Error("name must contain between 1 and 80 characters");
+  return name;
 }
 
 export class ConfigStore {
@@ -45,23 +54,32 @@ export class ConfigStore {
     this.secretBox = secretBox;
   }
 
-  getPublic() {
-    const config = this.database.getConfig();
+  toPublic(config) {
+    if (!config) return null;
     const { authSecretCipher, ...safe } = config;
     return { ...safe, authSecretConfigured: Boolean(authSecretCipher) };
   }
 
-  getPrivate() {
-    const config = this.database.getConfig();
+  listPublic() {
+    return this.database.listMonitors().map((config) => this.toPublic(config));
+  }
+
+  getPublic(id) {
+    const config = this.database.getMonitor(id);
+    if (!config) throw new Error("Monitor not found");
+    return this.toPublic(config);
+  }
+
+  getPrivate(id) {
+    const config = this.database.getMonitor(id);
+    if (!config) throw new Error("Monitor not found");
     return {
       ...config,
       authSecret: config.authSecretCipher ? this.secretBox.decrypt(config.authSecretCipher) : "",
     };
   }
 
-  update(input) {
-    const current = this.database.getConfig();
-    const authType = input.authType === "jwt" ? "jwt" : "apiKey";
+  normalize(input, current) {
     const sourceAccountId = input.sourceAccountId
       ? positiveInteger(input.sourceAccountId, "sourceAccountId")
       : null;
@@ -74,8 +92,9 @@ export class ConfigStore {
       : "none";
     const next = {
       ...current,
+      name: normalizeName(input.name ?? current.name),
       baseUrl: normalizeBaseUrl(input.baseUrl),
-      authType,
+      authType: input.authType === "jwt" ? "jwt" : "apiKey",
       sourceAccountId,
       targetAccountIds,
       monitorWindows: choices(input.monitorWindows || ["7d"], "monitorWindows", MONITOR_WINDOWS),
@@ -94,28 +113,60 @@ export class ConfigStore {
       dryRun: Boolean(input.dryRun),
       enabled: Boolean(input.enabled),
     };
-    if (Object.prototype.hasOwnProperty.call(input, "authSecret") && input.authSecret) {
+    if (Object.hasOwn(input, "authSecret") && input.authSecret) {
       next.authSecretCipher = this.secretBox.encrypt(String(input.authSecret));
     }
     if (input.clearAuthSecret === true) next.authSecretCipher = "";
     if (next.enabled && (!next.baseUrl || !next.sourceAccountId || !next.authSecretCipher)) {
       throw new Error("baseUrl, sourceAccountId and an administrator credential are required before enabling monitoring");
     }
+    return next;
+  }
 
+  create(input = {}) {
+    const id = crypto.randomUUID();
+    const defaults = {
+      id,
+      name: input.name || `Codex monitor ${this.database.listMonitors().length + 1}`,
+      ...structuredClone(DEFAULT_MONITOR_CONFIG),
+    };
+    const next = this.normalize({ ...defaults, ...input }, defaults);
+    this.database.createMonitor(next);
+    this.database.clearMonitorState(id, next.sourceAccountId);
+    return this.getPublic(id);
+  }
+
+  update(id, input) {
+    const current = this.database.getMonitor(id);
+    if (!current) throw new Error("Monitor not found");
+    const next = this.normalize(input, current);
     const baselineChanged =
       current.baseUrl !== next.baseUrl ||
       current.sourceAccountId !== next.sourceAccountId ||
       JSON.stringify(current.monitorWindows) !== JSON.stringify(next.monitorWindows);
-    this.database.saveConfig(next);
+    this.database.saveMonitor(id, next);
     let cancelledEvents = 0;
     if (baselineChanged) {
-      this.database.clearMonitorState(next.sourceAccountId);
-      cancelledEvents = this.database.cancelPendingEvents("Monitor identity changed");
+      this.database.clearMonitorState(id, next.sourceAccountId);
+      cancelledEvents = this.database.cancelPendingEvents(id, "Monitor identity changed");
     }
-    return { config: this.getPublic(), baselineChanged, cancelledEvents };
+    return { monitor: this.getPublic(id), baselineChanged, cancelledEvents };
   }
 
-  isRunnable(config = this.getPrivate()) {
-    return Boolean(config.baseUrl && config.sourceAccountId && config.authSecret);
+  delete(id) {
+    if (!this.database.getMonitor(id)) throw new Error("Monitor not found");
+    return this.database.deleteMonitor(id);
+  }
+
+  isRunnable(config) {
+    return Boolean(config?.baseUrl && config?.sourceAccountId && config?.authSecret);
+  }
+
+  forMonitor(id) {
+    return {
+      getPublic: () => this.getPublic(id),
+      getPrivate: () => this.getPrivate(id),
+      isRunnable: (config) => this.isRunnable(config),
+    };
   }
 }

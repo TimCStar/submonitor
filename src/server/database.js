@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const DEFAULT_CONFIG = Object.freeze({
+const DEFAULT_MONITOR_CONFIG = Object.freeze({
   baseUrl: "",
   authType: "apiKey",
   authSecretCipher: "",
@@ -38,6 +38,10 @@ export class AppDatabase {
     this.migrate();
   }
 
+  hasColumn(table, column) {
+    return this.db.prepare(`PRAGMA table_info(${table})`).all().some((item) => item.name === column);
+  }
+
   migrate() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -45,8 +49,16 @@ export class AppDatabase {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS monitors (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        config TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS quota_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monitor_id TEXT NOT NULL DEFAULT 'legacy',
         selector TEXT NOT NULL,
         role TEXT NOT NULL,
         canonical_name TEXT,
@@ -58,10 +70,9 @@ export class AppDatabase {
         fetched_at INTEGER NOT NULL,
         observed_at TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_snapshots_selector_id
-        ON quota_snapshots(selector, id DESC);
       CREATE TABLE IF NOT EXISTS reset_events (
         id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL DEFAULT 'legacy',
         source_account_id INTEGER NOT NULL,
         window TEXT NOT NULL,
         old_reset_at INTEGER NOT NULL,
@@ -74,8 +85,6 @@ export class AppDatabase {
         completed_at TEXT,
         updated_at TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_events_updated
-        ON reset_events(updated_at DESC);
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         level TEXT NOT NULL,
@@ -84,14 +93,36 @@ export class AppDatabase {
         details TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+    `);
+    if (!this.hasColumn("quota_snapshots", "monitor_id")) {
+      this.db.exec("ALTER TABLE quota_snapshots ADD COLUMN monitor_id TEXT NOT NULL DEFAULT 'legacy'");
+    }
+    if (!this.hasColumn("reset_events", "monitor_id")) {
+      this.db.exec("ALTER TABLE reset_events ADD COLUMN monitor_id TEXT NOT NULL DEFAULT 'legacy'");
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_snapshots_monitor_selector
+        ON quota_snapshots(monitor_id, selector, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_events_monitor_updated
+        ON reset_events(monitor_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_audit_created
         ON audit_logs(created_at DESC);
     `);
+    this.importLegacyMonitor();
+  }
 
-    if (!this.getSetting("config")) this.setSetting("config", DEFAULT_CONFIG);
-    if (!this.getSetting("monitor_state")) {
-      this.setSetting("monitor_state", { sourceAccountId: null, windows: {} });
-    }
+  importLegacyMonitor() {
+    const count = Number(this.db.prepare("SELECT COUNT(*) AS count FROM monitors").get().count);
+    if (count > 0) return;
+    const legacy = this.getSetting("config");
+    if (!legacy || (!legacy.baseUrl && !legacy.sourceAccountId && !legacy.authSecretCipher)) return;
+    const now = new Date().toISOString();
+    const name = legacy.sourceAccountId ? `Codex #${legacy.sourceAccountId}` : "Imported monitor";
+    this.db.prepare(`
+      INSERT INTO monitors(id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+    `).run("legacy", name, JSON.stringify({ ...DEFAULT_MONITOR_CONFIG, ...legacy }), now, now);
+    const oldState = this.getSetting("monitor_state");
+    if (oldState) this.setSetting("monitor_state:legacy", oldState);
   }
 
   getSetting(key) {
@@ -107,33 +138,89 @@ export class AppDatabase {
     `).run(key, JSON.stringify(value), now);
   }
 
-  getConfig() {
-    return { ...structuredClone(DEFAULT_CONFIG), ...(this.getSetting("config") || {}) };
+  listMonitors() {
+    return this.db.prepare(`
+      SELECT id, name, config, created_at AS createdAt, updated_at AS updatedAt
+      FROM monitors ORDER BY created_at ASC
+    `).all().map((row) => ({
+      id: row.id,
+      name: row.name,
+      ...structuredClone(DEFAULT_MONITOR_CONFIG),
+      ...parseJson(row.config, {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
   }
 
-  saveConfig(config) {
-    this.setSetting("config", config);
+  getMonitor(id) {
+    const row = this.db.prepare(`
+      SELECT id, name, config, created_at AS createdAt, updated_at AS updatedAt
+      FROM monitors WHERE id = ?
+    `).get(id);
+    return row ? {
+      id: row.id,
+      name: row.name,
+      ...structuredClone(DEFAULT_MONITOR_CONFIG),
+      ...parseJson(row.config, {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    } : null;
   }
 
-  getMonitorState() {
-    return this.getSetting("monitor_state") || { sourceAccountId: null, windows: {} };
+  createMonitor(monitor) {
+    const now = new Date().toISOString();
+    const { id, name, createdAt, updatedAt, ...config } = monitor;
+    this.db.prepare(`
+      INSERT INTO monitors(id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+    `).run(id, name, JSON.stringify(config), now, now);
+    return this.getMonitor(id);
   }
 
-  saveMonitorState(state) {
-    this.setSetting("monitor_state", state);
+  saveMonitor(id, monitor) {
+    const { name, createdAt, updatedAt, ...config } = monitor;
+    const result = this.db.prepare(`
+      UPDATE monitors SET name = ?, config = ?, updated_at = ? WHERE id = ?
+    `).run(name, JSON.stringify(config), new Date().toISOString(), id);
+    if (!result.changes) throw new Error("Monitor not found");
+    return this.getMonitor(id);
   }
 
-  clearMonitorState(sourceAccountId = null) {
-    this.saveMonitorState({ sourceAccountId, windows: {} });
+  deleteMonitor(id) {
+    this.cancelPendingEvents(id, "Monitor deleted");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM quota_snapshots WHERE monitor_id = ?").run(id);
+      this.db.prepare("DELETE FROM reset_events WHERE monitor_id = ?").run(id);
+      this.db.prepare("DELETE FROM settings WHERE key = ?").run(`monitor_state:${id}`);
+      const result = this.db.prepare("DELETE FROM monitors WHERE id = ?").run(id);
+      this.db.exec("COMMIT");
+      return result.changes > 0;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
-  addSnapshot(selector, snapshot) {
+  getMonitorState(monitorId) {
+    return this.getSetting(`monitor_state:${monitorId}`) || { sourceAccountId: null, windows: {} };
+  }
+
+  saveMonitorState(monitorId, state) {
+    this.setSetting(`monitor_state:${monitorId}`, state);
+  }
+
+  clearMonitorState(monitorId, sourceAccountId = null) {
+    this.saveMonitorState(monitorId, { sourceAccountId, windows: {} });
+  }
+
+  addSnapshot(monitorId, selector, snapshot) {
     this.db.prepare(`
       INSERT INTO quota_snapshots(
-        selector, role, canonical_name, used_percent, reset_at, window_seconds,
+        monitor_id, selector, role, canonical_name, used_percent, reset_at, window_seconds,
         allowed, limit_reached, fetched_at, observed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      monitorId,
       selector,
       snapshot.role,
       snapshot.canonicalName || null,
@@ -147,18 +234,20 @@ export class AppDatabase {
     );
     this.db.prepare(`
       DELETE FROM quota_snapshots
-      WHERE id NOT IN (SELECT id FROM quota_snapshots ORDER BY id DESC LIMIT 5000)
-    `).run();
+      WHERE monitor_id = ? AND id NOT IN (
+        SELECT id FROM quota_snapshots WHERE monitor_id = ? ORDER BY id DESC LIMIT 5000
+      )
+    `).run(monitorId, monitorId);
   }
 
-  listSnapshots(limit = 240) {
+  listSnapshots(monitorId, limit = 240) {
     return this.db.prepare(`
-      SELECT id, selector, role, canonical_name AS canonicalName,
+      SELECT id, monitor_id AS monitorId, selector, role, canonical_name AS canonicalName,
              used_percent AS usedPercent, reset_at AS resetAt,
              window_seconds AS windowSeconds, allowed, limit_reached AS limitReached,
              fetched_at AS fetchedAt, observed_at AS observedAt
-      FROM quota_snapshots ORDER BY id DESC LIMIT ?
-    `).all(limit).map((row) => ({
+      FROM quota_snapshots WHERE monitor_id = ? ORDER BY id DESC LIMIT ?
+    `).all(monitorId, limit).map((row) => ({
       ...row,
       allowed: Boolean(row.allowed),
       limitReached: Boolean(row.limitReached),
@@ -169,12 +258,13 @@ export class AppDatabase {
     const now = new Date().toISOString();
     const result = this.db.prepare(`
       INSERT OR IGNORE INTO reset_events(
-        id, source_account_id, window, old_reset_at, new_reset_at,
+        id, monitor_id, source_account_id, window, old_reset_at, new_reset_at,
         old_used_percent, new_used_percent, status, payload,
         confirmed_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
+      event.monitorId,
       event.sourceAccountId,
       event.window,
       event.baseline.resetAt || 0,
@@ -195,13 +285,7 @@ export class AppDatabase {
       UPDATE reset_events
       SET status = ?, payload = ?, completed_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(
-      event.status,
-      JSON.stringify(event),
-      event.completedAt || null,
-      new Date().toISOString(),
-      event.id,
-    );
+    `).run(event.status, JSON.stringify(event), event.completedAt || null, new Date().toISOString(), event.id);
   }
 
   getEvent(id) {
@@ -209,20 +293,22 @@ export class AppDatabase {
     return row ? parseJson(row.payload, null) : null;
   }
 
-  listEventPayloads(limit = 100) {
-    return this.db.prepare(`
-      SELECT payload FROM reset_events ORDER BY confirmed_at DESC LIMIT ?
-    `).all(limit).map((row) => parseJson(row.payload, null)).filter(Boolean);
+  listEventPayloads(limit = 100, monitorId = null) {
+    const rows = monitorId
+      ? this.db.prepare(`SELECT payload FROM reset_events WHERE monitor_id = ? ORDER BY confirmed_at DESC LIMIT ?`).all(monitorId, limit)
+      : this.db.prepare(`SELECT payload FROM reset_events ORDER BY confirmed_at DESC LIMIT ?`).all(limit);
+    return rows.map((row) => parseJson(row.payload, null)).filter(Boolean);
   }
 
-  listPendingEvents() {
+  listPendingEvents(monitorId) {
     return this.db.prepare(`
-      SELECT payload FROM reset_events WHERE status = 'pending' ORDER BY confirmed_at ASC
-    `).all().map((row) => parseJson(row.payload, null)).filter(Boolean);
+      SELECT payload FROM reset_events
+      WHERE monitor_id = ? AND status = 'pending' ORDER BY confirmed_at ASC
+    `).all(monitorId).map((row) => parseJson(row.payload, null)).filter(Boolean);
   }
 
-  cancelPendingEvents(reason) {
-    const events = this.listPendingEvents();
+  cancelPendingEvents(monitorId, reason) {
+    const events = this.listPendingEvents(monitorId);
     for (const event of events) {
       event.status = "cancelled";
       event.cancellationReason = reason;
@@ -233,7 +319,7 @@ export class AppDatabase {
         ...Object.values(event.actions?.subscriptions || {}),
       ].filter(Boolean);
       for (const action of actions) {
-        if (!['success', 'preview', 'skipped'].includes(action.status)) action.status = "skipped";
+        if (!["success", "preview", "skipped"].includes(action.status)) action.status = "skipped";
       }
       this.updateEvent(event);
     }
@@ -263,4 +349,4 @@ export class AppDatabase {
   }
 }
 
-export { DEFAULT_CONFIG };
+export { DEFAULT_MONITOR_CONFIG };

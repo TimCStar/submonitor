@@ -6,8 +6,8 @@ import { AuthService, isSameOrigin } from "./auth.js";
 import { ConfigStore } from "./config-store.js";
 import { AppDatabase } from "./database.js";
 import { readJson, sendData, sendError, serveStatic, setSecurityHeaders } from "./http-utils.js";
-import { MonitorEngine, extractSnapshots } from "./monitor-engine.js";
-import { MonitorScheduler } from "./scheduler.js";
+import { extractSnapshots } from "./monitor-engine.js";
+import { SchedulerManager } from "./scheduler.js";
 import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
 import { Sub2ApiClient } from "./sub2api-client.js";
@@ -20,43 +20,150 @@ const dataDirectory = path.resolve(process.env.SUBMONITOR_DATA_DIR || path.join(
 const masterKey = process.env.SUBMONITOR_MASTER_KEY || "";
 const adminPassword = process.env.SUBMONITOR_ADMIN_PASSWORD || "";
 const secureCookie = /^(1|true|yes|on)$/i.test(process.env.SUBMONITOR_COOKIE_SECURE || "false");
+const sessionHours = Number.parseInt(process.env.SUBMONITOR_SESSION_HOURS || "24", 10);
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SUBMONITOR_PORT is invalid");
+if (!Number.isInteger(sessionHours) || sessionHours < 1 || sessionHours > 720) {
+  throw new Error("SUBMONITOR_SESSION_HOURS must be between 1 and 720");
+}
 
 const database = new AppDatabase(path.join(dataDirectory, "submonitor.sqlite"));
 const secretBox = createSecretBox(masterKey);
 const configStore = new ConfigStore(database, secretBox);
-const broker = new EventBroker();
+const publicBroker = new EventBroker();
+const adminBroker = new EventBroker();
 const auth = new AuthService({
   password: adminPassword,
   signingSecret: masterKey,
   secureCookie,
-  sessionHours: Number.parseInt(process.env.SUBMONITOR_SESSION_HOURS || "24", 10),
-});
-const engine = new MonitorEngine({
-  database,
-  configStore,
-  emit: (type, data) => broker.emit(type, data),
-});
-const scheduler = new MonitorScheduler({
-  engine,
-  configStore,
-  emit: (type, data) => broker.emit(type, data),
+  sessionHours,
 });
 
-function dashboard() {
+function emitUpdate(type, payload) {
+  adminBroker.emit(type, payload);
+  publicBroker.emit("refresh", {
+    type,
+    monitorId: payload?.monitorId || null,
+    time: new Date().toISOString(),
+  });
+}
+
+const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate });
+
+function actionSummary(event) {
+  const actions = [
+    event.actions?.sourceRecovery,
+    ...Object.values(event.actions?.targetAccounts || {}),
+    ...Object.values(event.actions?.subscriptions || {}),
+  ].filter(Boolean);
   return {
-    config: configStore.getPublic(),
-    runtime: scheduler.snapshot(),
-    snapshots: database.listSnapshots(240),
-    events: database.listEventPayloads(40),
-    audit: database.listAudit(80),
+    total: actions.length,
+    completed: actions.filter((action) => ["success", "preview", "skipped"].includes(action.status)).length,
+    failed: actions.filter((action) => action.status === "failed").length,
+    running: actions.filter((action) => ["pending", "in_progress"].includes(action.status)).length,
   };
+}
+
+function publicEvent(event) {
+  return {
+    id: event.id,
+    monitorId: event.monitorId,
+    monitorName: event.monitorName,
+    sourceAccountId: event.sourceAccountId,
+    window: event.window,
+    baseline: {
+      usedPercent: event.baseline?.usedPercent,
+      resetAt: event.baseline?.resetAt,
+    },
+    resetSnapshot: {
+      usedPercent: event.resetSnapshot?.usedPercent,
+      resetAt: event.resetSnapshot?.resetAt,
+    },
+    status: event.status,
+    dryRun: event.dryRun,
+    confirmedAt: event.confirmedAt,
+    completedAt: event.completedAt || null,
+    actionSummary: actionSummary(event),
+  };
+}
+
+function publicRuntime(runtime) {
+  return {
+    status: runtime.status,
+    running: runtime.running,
+    startedAt: runtime.startedAt,
+    lastPollAt: runtime.lastPollAt,
+    lastSuccessAt: runtime.lastSuccessAt,
+    nextPollAt: runtime.nextPollAt,
+    hasError: Boolean(runtime.lastError),
+  };
+}
+
+function candidateSummary(monitorId) {
+  const state = database.getMonitorState(monitorId);
+  return Object.fromEntries(
+    Object.entries(state.windows || {}).map(([selector, value]) => [selector, value.pending ? {
+      confirmations: value.pending.confirmations,
+      firstConfirmedAt: value.pending.firstConfirmedAt,
+      lastConfirmedAt: value.pending.lastConfirmedAt || null,
+    } : null]),
+  );
+}
+
+function publicDashboard() {
+  const monitors = configStore.listPublic().map((monitor) => ({
+    id: monitor.id,
+    name: monitor.name,
+    sourceAccountId: monitor.sourceAccountId,
+    monitorWindows: monitor.monitorWindows,
+    pollIntervalSeconds: monitor.pollIntervalSeconds,
+    confirmationsRequired: monitor.confirmationsRequired,
+    dryRun: monitor.dryRun,
+    enabled: monitor.enabled,
+    targetAccountCount: monitor.targetAccountIds.length,
+    subscriptionGroupMode: monitor.subscriptionGroupMode,
+    runtime: publicRuntime(schedulers.snapshot(monitor.id)),
+    candidates: candidateSummary(monitor.id),
+    snapshots: database.listSnapshots(monitor.id, 240),
+  }));
+  return {
+    monitors,
+    events: database.listEventPayloads(100).map(publicEvent),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function adminDashboard() {
+  return {
+    monitors: configStore.listPublic().map((monitor) => ({
+      ...monitor,
+      runtime: schedulers.snapshot(monitor.id),
+      snapshots: database.listSnapshots(monitor.id, 40),
+    })),
+    events: database.listEventPayloads(100),
+    audit: database.listAudit(200),
+  };
+}
+
+function monitorRoute(pathname) {
+  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check))?$/);
+  return match ? { id: decodeURIComponent(match[1]), action: match[2] || null } : null;
 }
 
 async function apiRoute(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
     return sendData(response, { status: "ok", time: new Date().toISOString() });
+  }
+  if (request.method === "GET" && url.pathname === "/api/public/dashboard") {
+    return sendData(response, publicDashboard());
+  }
+  if (request.method === "GET" && url.pathname === "/api/public/events") {
+    const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));
+    return sendData(response, database.listEventPayloads(limit).map(publicEvent));
+  }
+  if (request.method === "GET" && url.pathname === "/api/public/stream") {
+    publicBroker.connect(request, response);
+    return;
   }
   if (request.method === "GET" && url.pathname === "/api/auth/session") {
     return sendData(response, { authenticated: auth.isAuthenticated(request) });
@@ -85,45 +192,61 @@ async function apiRoute(request, response, url) {
     return sendData(response, { authenticated: false });
   }
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    return sendData(response, dashboard());
+    return sendData(response, adminDashboard());
   }
-  if (request.method === "GET" && url.pathname === "/api/config") {
-    return sendData(response, configStore.getPublic());
+  if (request.method === "GET" && url.pathname === "/api/monitors") {
+    return sendData(response, configStore.listPublic());
   }
-  if (request.method === "PUT" && url.pathname === "/api/config") {
-    const body = await readJson(request);
-    const result = configStore.update(body);
-    database.addAudit("info", "config.updated", "Monitor configuration updated", {
+  if (request.method === "POST" && url.pathname === "/api/monitors") {
+    const monitor = configStore.create(await readJson(request));
+    schedulers.configChanged(monitor.id);
+    database.addAudit("info", "monitor.created", "Monitor created", { monitorId: monitor.id, name: monitor.name });
+    emitUpdate("config", { monitorId: monitor.id, data: monitor });
+    return sendData(response, monitor, 201);
+  }
+
+  const route = monitorRoute(url.pathname);
+  if (route && request.method === "PUT" && !route.action) {
+    const result = configStore.update(route.id, await readJson(request));
+    schedulers.configChanged(route.id);
+    database.addAudit("info", "monitor.updated", "Monitor configuration updated", {
+      monitorId: route.id,
       baselineChanged: result.baselineChanged,
       cancelledEvents: result.cancelledEvents,
-      enabled: result.config.enabled,
-      dryRun: result.config.dryRun,
+      enabled: result.monitor.enabled,
+      dryRun: result.monitor.dryRun,
     });
-    scheduler.reschedule(true);
-    broker.emit("config", result.config);
+    emitUpdate("config", { monitorId: route.id, data: result.monitor });
     return sendData(response, result);
   }
-  if (request.method === "POST" && url.pathname === "/api/config/test") {
-    const config = configStore.getPrivate();
+  if (route && request.method === "DELETE" && !route.action) {
+    const monitor = configStore.getPublic(route.id);
+    schedulers.remove(route.id);
+    configStore.delete(route.id);
+    database.addAudit("warn", "monitor.deleted", "Monitor deleted", { monitorId: route.id, name: monitor.name });
+    emitUpdate("config", { monitorId: route.id, data: null });
+    return sendData(response, { deleted: true });
+  }
+  if (route && request.method === "POST" && route.action === "test") {
+    const config = configStore.getPrivate(route.id);
     if (!configStore.isRunnable(config)) throw new Error("Save a complete connection configuration first");
     const quota = await new Sub2ApiClient(config).queryCodexQuota(config.sourceAccountId);
     const snapshots = extractSnapshots(quota);
-    database.addAudit("info", "config.connection_test", "Sub2API connection test succeeded", {
+    database.addAudit("info", "monitor.connection_test", "Sub2API connection test succeeded", {
+      monitorId: route.id,
       sourceAccountId: config.sourceAccountId,
     });
     return sendData(response, { snapshots });
   }
-  if (request.method === "POST" && url.pathname === "/api/monitor/check") {
-    const result = await scheduler.runNow("manual");
-    return sendData(response, result);
+  if (route && request.method === "POST" && route.action === "check") {
+    return sendData(response, await schedulers.runNow(route.id, "manual"));
   }
   if (request.method === "GET" && url.pathname === "/api/events") {
     const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));
     return sendData(response, database.listEventPayloads(limit));
   }
   if (request.method === "GET" && url.pathname.startsWith("/api/events/")) {
-    const id = decodeURIComponent(url.pathname.slice("/api/events/".length));
-    const event = database.getEvent(id);
+    const event = database.getEvent(decodeURIComponent(url.pathname.slice("/api/events/".length)));
     return event ? sendData(response, event) : sendError(response, 404, "Event not found", "NOT_FOUND");
   }
   if (request.method === "GET" && url.pathname === "/api/audit") {
@@ -131,7 +254,7 @@ async function apiRoute(request, response, url) {
     return sendData(response, database.listAudit(limit));
   }
   if (request.method === "GET" && url.pathname === "/api/stream") {
-    broker.connect(request, response);
+    adminBroker.connect(request, response);
     return;
   }
   return sendError(response, 404, "API endpoint not found", "NOT_FOUND");
@@ -162,12 +285,13 @@ server.listen(port, host, () => {
     message: "SubMonitor started",
     address: `http://${host}:${port}`,
   }));
-  scheduler.start();
+  schedulers.start();
 });
 
 function shutdown() {
-  scheduler.stop();
-  broker.close();
+  schedulers.stop();
+  publicBroker.close();
+  adminBroker.close();
   server.close(() => {
     database.close();
     process.exit(0);

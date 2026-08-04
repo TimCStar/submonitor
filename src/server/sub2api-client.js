@@ -46,6 +46,11 @@ export class Sub2ApiClient {
       return Object.hasOwn(envelope, "data") ? envelope.data : envelope;
     } catch (error) {
       if (error?.name === "AbortError") throw new Error(`${method} ${apiPath} timed out`);
+      if (error instanceof TypeError && /fetch failed/i.test(error.message)) {
+        const cause = error.cause;
+        const reason = [cause?.code, cause?.message].filter(Boolean).join(": ") || error.message;
+        throw new Error(`Cannot reach Sub2API at ${this.config.baseUrl}: ${reason}`);
+      }
       throw error;
     } finally {
       clearTimeout(timeout);

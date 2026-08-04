@@ -10,7 +10,9 @@ SubMonitor 是面向 Sub2API 的 Codex OAuth 额度周期监控和自动恢复�
 
 ## 功能
 
-- 独立 React 管理前端和 Node.js 后台服务
+- 无需登录的公开监控页；配置与审计后台单独登录
+- 支持多个独立 Codex OAuth 监控任务，每个任务拥有独立 Sub2API 凭据、源账号、目标账号和订阅规则
+- Sub2API 风格的响应式 React 控制台和 Node.js 后台服务
 - `5h`、`7d`、`primary`、`secondary` 额度窗口
 - 以 `reset_at` 周期推进为主要判据
 - `5% -> 0%`、`0% -> 0%` 均可识别
@@ -44,7 +46,9 @@ SUBMONITOR_MASTER_KEY=一个至少32位且长期保持不变的随机密钥
 docker compose up -d --build
 ```
 
-访问 `http://服务器地址:8787`，使用 `SUBMONITOR_ADMIN_PASSWORD` 登录。首次登录后在“配置”页面填写 Sub2API 地址、管理员 API Key 或 JWT、Codex 源账号和目标账号。
+访问 `http://服务器地址:8787` 会直接进入公开监控页，不需要登录。配置和审计页面使用 `SUBMONITOR_ADMIN_PASSWORD` 登录后访问。
+
+首次进入“配置”页面后，可以创建任意数量的监控任务。每个任务分别填写 Sub2API 地址、管理员 API Key 或 JWT、Codex 源账号、目标账号和订阅规则；不同任务的凭据、基线、快照、事件和调度器互相隔离。
 
 公网部署应通过 HTTPS 反向代理访问，并设置：
 
@@ -95,7 +99,7 @@ new.reset_at > old.reset_at + resetGraceSeconds
 每个事件使用以下唯一键：
 
 ```text
-sourceAccountId:window:oldResetAt
+monitorId:sourceAccountId:window:oldResetAt
 ```
 
 建议只配置一个权威窗口。同时配置 `5h` 和 `7d` 时，两个窗口各自切换都会生成事件。
@@ -154,11 +158,12 @@ pnpm test
 pnpm run check
 ```
 
-测试覆盖低使用量自然重置、零使用量自然重置、完整动作链去重，以及 dry-run 事件归档。
+测试覆盖低使用量和零使用量自然重置、完整动作链去重、dry-run 事件归档、多任务隔离、公开接口脱敏和连接错误诊断。
 
 ## 安全边界
 
 - 浏览器不会收到 Sub2API 管理凭据明文或密文。
+- 公开接口不会返回 Sub2API 地址、目标账号 ID、订阅分组 ID 或动作错误详情。
 - SubMonitor 不提供 OpenAI 上游额度手动重置功能。
 - “立即检查”会读取实时额度；如果恰好完成自然重置确认，正常模式下会执行配置的 Sub2API 自动动作。
 - SQLite 部署只应运行一个 SubMonitor 实例。

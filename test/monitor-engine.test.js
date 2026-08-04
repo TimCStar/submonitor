@@ -48,7 +48,8 @@ test("confirmed reset recovers source, target and active subscription exactly on
     rmSync(directory, { recursive: true, force: true });
   });
   const store = new ConfigStore(database, createSecretBox("test-master-key-with-at-least-32-characters"));
-  store.update({
+  const monitor = store.create({
+    name: "Production Codex",
     baseUrl: "https://sub2api.example.test",
     authType: "apiKey",
     authSecret: "secret",
@@ -100,7 +101,12 @@ test("confirmed reset recovers source, target and active subscription exactly on
       counts.subscription += 1;
     },
   };
-  const engine = new MonitorEngine({ database, configStore: store, clientFactory: () => client });
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+  });
 
   await engine.pollOnce();
   await engine.pollOnce();
@@ -108,7 +114,7 @@ test("confirmed reset recovers source, target and active subscription exactly on
   await engine.pollOnce();
 
   assert.deepEqual(counts, { recover: 1, target: 1, subscription: 1 });
-  const events = database.listEventPayloads();
+  const events = database.listEventPayloads(100, monitor.id);
   assert.equal(events.length, 1);
   assert.equal(events[0].status, "complete");
   assert.equal(events[0].baseline.usedPercent, 5);
@@ -123,7 +129,8 @@ test("dry-run event is archived as preview and is never written later", async (t
     rmSync(directory, { recursive: true, force: true });
   });
   const store = new ConfigStore(database, createSecretBox("another-master-key-with-at-least-32-characters"));
-  store.update({
+  const monitor = store.create({
+    name: "Preview Codex",
     baseUrl: "https://sub2api.example.test",
     authType: "apiKey",
     authSecret: "secret",
@@ -159,11 +166,16 @@ test("dry-run event is archived as preview and is never written later", async (t
     async recoverSourceAccount() { writes += 1; },
     async resetTargetAccount() { writes += 1; },
   };
-  const engine = new MonitorEngine({ database, configStore: store, clientFactory: () => client });
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+  });
   await engine.pollOnce();
   await engine.pollOnce();
-  store.update({ ...store.getPublic(), authSecret: "", dryRun: false });
+  store.update(monitor.id, { ...store.getPublic(monitor.id), authSecret: "", dryRun: false });
   await engine.pollOnce();
   assert.equal(writes, 0);
-  assert.equal(database.listEventPayloads()[0].status, "preview");
+  assert.equal(database.listEventPayloads(100, monitor.id)[0].status, "preview");
 });

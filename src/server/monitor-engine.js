@@ -75,13 +75,15 @@ export function isNaturalReset(baseline, current, config, nowSeconds = Date.now(
 }
 
 function eventKey(config, selector, baseline) {
-  return `${config.sourceAccountId}:${selector}:${baseline.resetAt || baseline.fetchedAt}`;
+  return `${config.id}:${config.sourceAccountId}:${selector}:${baseline.resetAt || baseline.fetchedAt}`;
 }
 
 function createEvent(config, selector, pending, current) {
   const now = new Date().toISOString();
   return {
     id: pending.eventId,
+    monitorId: config.id,
+    monitorName: config.name,
     status: "pending",
     sourceAccountId: config.sourceAccountId,
     window: selector,
@@ -124,16 +126,18 @@ function subscriptionResetBody(event) {
 }
 
 export class MonitorEngine {
-  constructor({ database, configStore, emit = () => {}, clientFactory }) {
+  constructor({ database, configStore, monitorId = null, emit = () => {}, clientFactory }) {
     this.database = database;
     this.configStore = configStore;
+    this.monitorId = monitorId;
     this.emit = emit;
     this.clientFactory = clientFactory || ((config) => new Sub2ApiClient(config));
   }
 
   audit(level, action, message, details = {}) {
-    this.database.addAudit(level, action, message, details);
-    this.emit("audit", { level, action, message, details, createdAt: new Date().toISOString() });
+    const scopedDetails = { monitorId: this.monitorId, ...details };
+    this.database.addAudit(level, action, message, scopedDetails);
+    this.emit("audit", { level, action, message, details: scopedDetails, createdAt: new Date().toISOString() });
   }
 
   async pollOnce() {
@@ -144,7 +148,7 @@ export class MonitorEngine {
 
     const quota = await client.queryCodexQuota(config.sourceAccountId);
     const snapshots = extractSnapshots(quota);
-    const state = this.database.getMonitorState();
+    const state = this.database.getMonitorState(config.id);
     if (state.sourceAccountId !== config.sourceAccountId) {
       state.sourceAccountId = config.sourceAccountId;
       state.windows = {};
@@ -159,19 +163,22 @@ export class MonitorEngine {
         });
         continue;
       }
-      this.database.addSnapshot(selector, snapshot);
+      this.database.addSnapshot(config.id, selector, snapshot);
       const event = this.processWindow(config, state, selector, snapshot);
       if (event) newEvents.push(event);
     }
-    this.database.saveMonitorState(state);
-    this.emit("snapshot", { snapshots: this.database.listSnapshots(20) });
+    this.database.saveMonitorState(config.id, state);
+    this.emit("snapshot", { snapshots: this.database.listSnapshots(config.id, 20) });
 
     for (const event of newEvents) await this.executeEvent(config, client, event);
     this.audit("info", "quota.checked", "Codex quota check completed", {
       sourceAccountId: config.sourceAccountId,
       windows: config.monitorWindows,
     });
-    return { snapshots: this.database.listSnapshots(20), newEvents: newEvents.map((item) => item.id) };
+    return {
+      snapshots: this.database.listSnapshots(config.id, 20),
+      newEvents: newEvents.map((item) => item.id),
+    };
   }
 
   processWindow(config, state, selector, current) {
@@ -388,7 +395,7 @@ export class MonitorEngine {
   }
 
   async resumePendingEvents(config, client) {
-    for (const event of this.database.listPendingEvents()) {
+    for (const event of this.database.listPendingEvents(config.id)) {
       await this.executeEvent(config, client, event);
     }
   }
