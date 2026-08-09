@@ -99,7 +99,14 @@ test("public monitoring stays anonymous and sanitized while management requires 
   const secondFactorCookie = secondFactorLogin.headers.get("set-cookie").split(";", 1)[0];
   for (const name of ["Primary Codex", "Backup Codex"]) {
     const options = name === "Primary Codex"
-      ? { subscriptionGroupMode: "auto", publicSubscriberPreviewEnabled: false }
+      ? {
+        baseUrl: "https://sub2api.example.test",
+        sourceAccountId: 22,
+        authSecret: "test-api-key",
+        enabled: true,
+        subscriptionGroupMode: "auto",
+        publicSubscriberPreviewEnabled: false,
+      }
       : {};
     const created = await fetch(`${baseUrl}/api/monitors`, {
       method: "POST",
@@ -110,7 +117,7 @@ test("public monitoring stays anonymous and sanitized while management requires 
   }
 
   const publicPayload = await fetch(`${baseUrl}/api/public/dashboard`).then((response) => response.json());
-  assert.equal(publicPayload.data.monitors.length, 2);
+  assert.equal(publicPayload.data.monitors.length, 1);
   assert.equal(publicPayload.data.monitors[0].publicSubscriberPreviewEnabled, false);
   const publicSubscribers = await fetch(`${baseUrl}/api/public/monitors/${publicPayload.data.monitors[0].id}/subscribers`);
   assert.equal(publicSubscribers.status, 200);
@@ -122,5 +129,9 @@ test("public monitoring stays anonymous and sanitized while management requires 
 
   const admin = await fetch(`${baseUrl}/api/dashboard`, { headers: { Cookie: secondFactorCookie } });
   assert.equal(admin.status, 200);
-  assert.equal((await admin.json()).data.monitors.length, 2);
+  const adminPayload = await admin.json();
+  assert.equal(adminPayload.data.monitors.length, 2);
+  const disabledMonitor = adminPayload.data.monitors.find((monitor) => monitor.enabled === false);
+  assert.ok(disabledMonitor);
+  assert.equal((await fetch(`${baseUrl}/api/public/monitors/${disabledMonitor.id}/subscribers`)).status, 404);
 });

@@ -72,8 +72,11 @@ export class ConfigStore {
     };
   }
 
-  listPublic() {
-    return this.database.listMonitors().map((config) => this.toPublic(config));
+  listPublic({ enabledOnly = false } = {}) {
+    return this.database
+      .listMonitors()
+      .filter((config) => !enabledOnly || config.enabled === true)
+      .map((config) => this.toPublic(config));
   }
 
   getPublic(id) {

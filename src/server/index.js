@@ -140,7 +140,7 @@ function candidateSummary(monitorId) {
 }
 
 function publicDashboard() {
-  const monitors = configStore.listPublic().map((monitor) => ({
+  const monitors = configStore.listPublic({ enabledOnly: true }).map((monitor) => ({
     id: monitor.id,
     name: monitor.name,
     sourceAccountId: monitor.sourceAccountId,
@@ -156,9 +156,10 @@ function publicDashboard() {
     candidates: candidateSummary(monitor.id),
     snapshots: database.listSnapshots(monitor.id, 240),
   }));
+  const monitorIds = new Set(monitors.map((monitor) => monitor.id));
   return {
     monitors,
-    events: database.listEventPayloads(100).map(publicEvent),
+    events: database.listEventPayloads(100).filter((event) => monitorIds.has(event.monitorId)).map(publicEvent),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -189,7 +190,8 @@ async function apiRoute(request, response, url) {
   }
   if (request.method === "GET" && url.pathname === "/api/public/events") {
     const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));
-    return sendData(response, database.listEventPayloads(limit).map(publicEvent));
+    const enabledMonitorIds = new Set(configStore.listPublic({ enabledOnly: true }).map((monitor) => monitor.id));
+    return sendData(response, database.listEventPayloads(limit).filter((event) => enabledMonitorIds.has(event.monitorId)).map(publicEvent));
   }
   if (request.method === "GET" && url.pathname === "/api/public/stream") {
     publicBroker.connect(request, response);
@@ -198,7 +200,7 @@ async function apiRoute(request, response, url) {
   const publicSubscriberMatch = url.pathname.match(/^\/api\/public\/monitors\/([^/]+)\/subscribers$/);
   if (request.method === "GET" && publicSubscriberMatch) {
     const monitorId = decodeURIComponent(publicSubscriberMatch[1]);
-    const monitor = configStore.listPublic().find((item) => item.id === monitorId);
+    const monitor = configStore.listPublic({ enabledOnly: true }).find((item) => item.id === monitorId);
     if (!monitor) return sendError(response, 404, "Monitor not found", "NOT_FOUND");
     if (monitor.publicSubscriberPreviewEnabled === false) {
       return sendData(response, {

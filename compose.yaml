@@ -1,10 +1,6 @@
 services:
   submonitor:
     image: ghcr.io/timcstar/submonitor:latest
-    build:
-      context: .
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     pull_policy: missing
     restart: unless-stopped
     env_file:

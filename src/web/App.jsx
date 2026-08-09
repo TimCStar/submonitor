@@ -13,18 +13,60 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  Monitor,
+  Moon,
   Plus,
   RefreshCw,
   Save,
   ServerCog,
   Settings2,
   ShieldCheck,
+  Sun,
   Trash2,
   UsersRound,
   X,
   XCircle,
 } from "lucide-react";
 import { api } from "./api.js";
+
+const THEME_STORAGE_KEY = "submonitor-theme";
+const THEME_OPTIONS = [
+  { value: "system", label: "跟随系统", icon: Monitor },
+  { value: "light", label: "亮色", icon: Sun },
+  { value: "dark", label: "暗色", icon: Moon },
+];
+
+function readThemePreference() {
+  const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return THEME_OPTIONS.some((option) => option.value === value) ? value : "system";
+}
+
+function resolveTheme(preference) {
+  return preference === "system"
+    ? (window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light")
+    : preference;
+}
+
+function applyTheme(preference) {
+  const resolved = resolveTheme(preference);
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolved === "dark" ? "#0f141a" : "#f4f6f8");
+}
+
+function ThemeSelector({ value, onChange }) {
+  return <div className="theme-switcher" role="group" aria-label="主题模式">
+    {THEME_OPTIONS.map(({ value: option, label, icon: Icon }) => <button
+      type="button"
+      key={option}
+      className={`theme-choice ${value === option ? "active" : ""}`}
+      onClick={() => onChange(option)}
+      aria-label={label}
+      aria-pressed={value === option}
+      title={label}
+    ><Icon size={15} /><span>{label}</span></button>)}
+  </div>;
+}
 
 const NAVIGATION = [
   { id: "overview", label: "监控", icon: CircleGauge, admin: false },
@@ -463,7 +505,7 @@ function EventDrawer({ event, onClose }) {
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">RESET EVENT</span><h2>{event.monitorName || "监控任务"}</h2></div><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></div><div className="event-hero"><StatusBadge status={event.status} /><strong>#{event.sourceAccountId}</strong><time>{formatDate(event.confirmedAt, true)}</time></div><div className="event-delta"><div><span>旧周期</span><strong>{event.baseline.usedPercent}%</strong><small>{formatDate(event.baseline.resetAt, true)}</small></div><ChevronRight size={22} /><div><span>新周期</span><strong>{event.resetSnapshot.usedPercent}%</strong><small>{formatDate(event.resetSnapshot.resetAt, true)}</small></div></div><section className="public-action-summary"><div><span>动作总数</span><strong>{summary.total}</strong></div><div><span>已完成</span><strong>{summary.completed}</strong></div><div><span>失败</span><strong>{summary.failed}</strong></div></section></aside></div>;
 }
 
-function AppShell({ publicData, adminData, authenticated, initialPage, onRequireAdmin, onLogout, reloadAdmin }) {
+function AppShell({ publicData, adminData, authenticated, initialPage, onRequireAdmin, onLogout, reloadAdmin, theme, onThemeChange }) {
   const [page, setPage] = useState(initialPage || "overview");
   const [selectedMonitorId, setSelectedMonitorId] = useState(publicData.monitors[0]?.id || null);
   const [selectedAdminId, setSelectedAdminId] = useState(adminData?.monitors[0]?.id || null);
@@ -479,7 +521,7 @@ function AppShell({ publicData, adminData, authenticated, initialPage, onRequire
   function navigate(item) { if (item.admin && !authenticated) onRequireAdmin(item.id); else setPage(item.id); }
 
   return <div className="app-shell"><aside className="sidebar"><div className="sidebar-brand"><div className="brand-mark small"><Activity size={20} /></div><span>SubMonitor</span></div><nav className={authenticated ? "authenticated-nav" : "guest-nav"}>{NAVIGATION.filter((item) => authenticated || !item.admin).map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item)}><Icon size={19} /><span>{item.label}</span></button>; })}</nav>{authenticated && <button className="logout-button" onClick={onLogout}><LogOut size={18} /><span>退出后台</span></button>}</aside>
-    <div className="workspace"><header className="topbar"><div className="runtime-state"><span className={`status-dot ${unhealthyCount ? "error" : "idle"}`} /><strong>{unhealthyCount ? `${unhealthyCount} 个任务异常` : "公开监控"}</strong><small>{publicData.monitors.length} 个任务 · 更新 {formatDate(publicData.generatedAt, true)}</small></div><button className="button secondary" onClick={() => authenticated ? setPage("settings") : onRequireAdmin("settings")}>{authenticated ? <Settings2 size={17} /> : <KeyRound size={17} />}{authenticated ? "管理后台" : "后台登录"}</button></header>
+    <div className="workspace"><header className="topbar"><div className="runtime-state"><span className={`status-dot ${unhealthyCount ? "error" : "idle"}`} /><strong>{unhealthyCount ? `${unhealthyCount} 个任务异常` : "公开监控"}</strong><small>{publicData.monitors.length} 个任务 · 更新 {formatDate(publicData.generatedAt, true)}</small></div><div className="topbar-actions"><ThemeSelector value={theme} onChange={onThemeChange} /><button className="button secondary" onClick={() => authenticated ? setPage("settings") : onRequireAdmin("settings")}>{authenticated ? <Settings2 size={17} /> : <KeyRound size={17} />}{authenticated ? "管理后台" : "后台登录"}</button></div></header>
       <main className="content">{page === "overview" && <Overview data={publicData} selectedId={selectedMonitorId} onSelectMonitor={setSelectedMonitorId} onSelectEvent={setSelectedEvent} now={now} onAdmin={() => authenticated ? setPage("settings") : onRequireAdmin("settings")} />}{page === "events" && <EventsPage events={publicData.events} onSelect={setSelectedEvent} />}{page === "audit" && adminData && <AuditPage entries={adminData.audit} />}{page === "settings" && adminData && <SettingsPage adminData={adminData} selectedId={selectedAdminId} onSelect={setSelectedAdminId} reload={reloadAdmin} notify={notify} />}</main></div>
     <EventDrawer event={selectedEvent} onClose={() => setSelectedEvent(null)} /><Toast toast={toast} onClose={() => setToast(null)} />
   </div>;
@@ -491,7 +533,21 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [pendingPage, setPendingPage] = useState("settings");
+  const [theme, setTheme] = useState(readThemePreference);
   const refreshTimer = useRef(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return undefined;
+    const update = () => { if (theme === "system") applyTheme("system"); };
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, [theme]);
 
   const loadPublic = useCallback(async () => setPublicData(await api.publicDashboard()), []);
   const loadAdmin = useCallback(async () => { const data = await api.adminDashboard(); setAdminData(data); return data; }, []);
@@ -519,5 +575,5 @@ export default function App() {
   async function logout() { await api.logout().catch(() => {}); setAuthenticated(false); setAdminData(null); }
 
   if (!publicData) return <div className="app-loading"><Activity size={26} /><span>SubMonitor</span></div>;
-  return <><AppShell key={`${authenticated}-${pendingPage}`} publicData={publicData} adminData={adminData} authenticated={authenticated} initialPage={authenticated ? pendingPage : "overview"} onRequireAdmin={requireAdmin} onLogout={logout} reloadAdmin={loadAdmin} /><LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={loggedIn} /></>;
+  return <><AppShell key={`${authenticated}-${pendingPage}`} publicData={publicData} adminData={adminData} authenticated={authenticated} initialPage={authenticated ? pendingPage : "overview"} onRequireAdmin={requireAdmin} onLogout={logout} reloadAdmin={loadAdmin} theme={theme} onThemeChange={setTheme} /><LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={loggedIn} /></>;
 }

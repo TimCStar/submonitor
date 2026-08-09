@@ -591,3 +591,104 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+.topbar-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.theme-switcher { min-width: 0; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; padding: 3px; background: #f3f4f6; }
+.theme-choice { min-width: 34px; height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.theme-choice:hover { color: var(--ink); }
+.theme-choice.active { color: var(--teal-dark); background: var(--surface); box-shadow: 0 1px 3px rgba(15, 23, 42, .1); }
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  color: #e5e7eb;
+  background: #0f141a;
+  --ink: #e5e7eb;
+  --muted: #9ca3af;
+  --faint: #6b7280;
+  --line: #2a3441;
+  --line-strong: #465362;
+  --surface: #161c24;
+  --canvas: #0f141a;
+  --teal: #2dd4bf;
+  --teal-dark: #5eead4;
+  --teal-hover: #14b8a6;
+  --teal-soft: #123b38;
+  --amber: #fbbf24;
+  --amber-soft: #3d2e10;
+  --red: #f87171;
+  --red-soft: #3a2025;
+  --blue: #60a5fa;
+  --blue-soft: #1e2e48;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .32), 0 5px 18px rgba(0, 0, 0, .18);
+}
+
+html[data-theme="dark"] body { color: var(--ink); background: var(--canvas); }
+html[data-theme="dark"] .login-panel,
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] .button.secondary,
+html[data-theme="dark"] .icon-button,
+html[data-theme="dark"] .theme-choice.active { color: var(--ink); background: var(--surface); }
+html[data-theme="dark"] .login-panel { border-color: var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .42); }
+html[data-theme="dark"] .login-panel label,
+html[data-theme="dark"] .field > span,
+html[data-theme="dark"] .form-section-title,
+html[data-theme="dark"] .masked-identity,
+html[data-theme="dark"] td { color: var(--ink); }
+html[data-theme="dark"] input:hover,
+html[data-theme="dark"] select:hover { border-color: var(--line-strong); }
+html[data-theme="dark"] input::placeholder { color: var(--faint); }
+html[data-theme="dark"] .button.secondary,
+html[data-theme="dark"] .icon-button { border-color: var(--line); }
+html[data-theme="dark"] .button.secondary:hover:not(:disabled),
+html[data-theme="dark"] .icon-button:hover:not(:disabled) { color: var(--teal-dark); border-color: var(--teal-hover); background: var(--teal-soft); }
+html[data-theme="dark"] .icon-button.danger { color: var(--red); border-color: #71343d; }
+html[data-theme="dark"] .icon-button.danger:hover:not(:disabled) { border-color: #a84855; background: var(--red-soft); }
+html[data-theme="dark"] .sidebar { color: var(--ink); border-color: var(--line); background: rgba(22, 28, 36, .95); }
+html[data-theme="dark"] .sidebar-brand { color: var(--ink); }
+html[data-theme="dark"] .sidebar nav button:hover,
+html[data-theme="dark"] .logout-button:hover { background: #202934; }
+html[data-theme="dark"] .sidebar nav button.active { background: var(--teal-soft); }
+html[data-theme="dark"] .topbar { border-color: var(--line); background: rgba(22, 28, 36, .86); }
+html[data-theme="dark"] .theme-switcher,
+html[data-theme="dark"] .segmented { background: #202832; }
+html[data-theme="dark"] .theme-choice.active,
+html[data-theme="dark"] .segmented button.active { background: var(--surface); }
+html[data-theme="dark"] .segmented button:hover { color: var(--ink); }
+html[data-theme="dark"] .quota-panel:hover { border-color: var(--line-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, .24); }
+html[data-theme="dark"] .progress-track,
+html[data-theme="dark"] .subscriber-usage-track { background: #29333f; }
+html[data-theme="dark"] .quota-meta { border-color: #27313c; }
+html[data-theme="dark"] .monitor-picker > button { box-shadow: 0 1px 2px rgba(0, 0, 0, .2); }
+html[data-theme="dark"] .monitor-picker > button:hover { border-color: var(--teal-hover); background: #172b2a; }
+html[data-theme="dark"] .monitor-picker > button.active { background: var(--teal-soft); }
+html[data-theme="dark"] th { background: #171e27; }
+html[data-theme="dark"] td { border-color: #27313c; }
+html[data-theme="dark"] .clickable-row:hover td { background: #172b2a; }
+html[data-theme="dark"] .window-pill { color: var(--ink); background: #202832; }
+html[data-theme="dark"] .availability.online,
+html[data-theme="dark"] .status-complete,
+html[data-theme="dark"] .status-success { color: #6ee7b7; background: #123c2d; }
+html[data-theme="dark"] .empty-state { background: rgba(22, 28, 36, .62); }
+html[data-theme="dark"] .monitor-admin-list > div:last-child > button { color: var(--ink); }
+html[data-theme="dark"] .monitor-admin-list > div:last-child > button:hover { background: #202934; }
+html[data-theme="dark"] .security-secret { border-color: #17675f; }
+html[data-theme="dark"] .toggle { color: var(--ink); }
+html[data-theme="dark"] .toggle > span { border-color: #465362; background: #303a46; }
+html[data-theme="dark"] .toggle > span::after { background: #e5e7eb; }
+html[data-theme="dark"] .subscriber-list { background: #12181f; }
+html[data-theme="dark"] .subscriber-avatar { background: #164743; }
+html[data-theme="dark"] .subscriber-usage-row strong { color: var(--ink); }
+html[data-theme="dark"] .subscriber-status { color: #6ee7b7; }
+html[data-theme="dark"] .security-status.enabled { color: #6ee7b7; }
+html[data-theme="dark"] .drawer-backdrop,
+html[data-theme="dark"] .dialog-backdrop { background: rgba(0, 0, 0, .62); }
+html[data-theme="dark"] .event-delta { background: #171e27; }
+html[data-theme="dark"] .toast { background: #123b38; border-color: #17675f; }
+html[data-theme="dark"] .toast-error { background: var(--red-soft); border-color: #71343d; }
+
+@media (max-width: 820px) {
+  .topbar-actions { gap: 6px; }
+  .theme-choice { width: 32px; min-width: 32px; padding: 0; }
+  .theme-choice span { display: none; }
+}
