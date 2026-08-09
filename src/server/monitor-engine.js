@@ -61,12 +61,15 @@ export function isFreshSnapshot(snapshot, config, nowSeconds = Date.now() / 1000
 
 export function isNaturalReset(baseline, current, config, nowSeconds = Date.now() / 1000) {
   if (!baseline || !isFreshSnapshot(current, config, nowSeconds)) return false;
-  const resetAdvanced =
-    baseline.resetAt > 0 && current.resetAt > baseline.resetAt + config.resetGraceSeconds;
-  if (resetAdvanced) return true;
-
+  // An unused Codex account can expose a future boundary that moves forward
+  // on each read. Treat a boundary as a reset only after the old window has
+  // actually elapsed, so that rolling timestamps do not create false events.
   const oldWindowElapsed =
     baseline.resetAt > 0 && nowSeconds >= baseline.resetAt + config.resetGraceSeconds;
+  const resetAdvanced =
+    oldWindowElapsed && current.resetAt > baseline.resetAt + config.resetGraceSeconds;
+  if (resetAdvanced) return true;
+
   return (
     oldWindowElapsed &&
     current.resetAt === 0 &&

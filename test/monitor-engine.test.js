@@ -20,7 +20,7 @@ function snapshot(usedPercent, resetAt, fetchedAt = now) {
 }
 
 test("reset_at advancement detects low-use and zero-use cycle changes", () => {
-  const oldBoundary = now + 120;
+  const oldBoundary = now - 120;
   const newBoundary = oldBoundary + 7 * 24 * 60 * 60;
   assert.equal(
     isNaturalReset(snapshot(5, oldBoundary, now - 300), snapshot(0, newBoundary), detectionConfig, now),
@@ -36,6 +36,15 @@ test("reset_at advancement detects low-use and zero-use cycle changes", () => {
   );
   assert.equal(
     isNaturalReset(snapshot(5, oldBoundary, now - 300), snapshot(0, newBoundary, now - 1000), detectionConfig, now),
+    false,
+  );
+});
+
+test("future rolling boundaries from an unused account do not trigger a reset", () => {
+  const oldBoundary = now + 5 * 60 * 60;
+  const movingBoundary = oldBoundary + 300;
+  assert.equal(
+    isNaturalReset(snapshot(0, oldBoundary, now - 30), snapshot(0, movingBoundary), detectionConfig, now),
     false,
   );
 });
@@ -68,7 +77,7 @@ test("confirmed reset recovers source, target and active subscription exactly on
     enabled: false,
   });
 
-  const oldBoundary = now + 120;
+  const oldBoundary = now - 120;
   const newBoundary = oldBoundary + 7 * 24 * 60 * 60;
   let quotaCalls = 0;
   const counts = { recover: 0, target: 0, subscription: 0 };
@@ -148,7 +157,7 @@ test("dry-run event is archived as preview and is never written later", async (t
     dryRun: true,
     enabled: false,
   });
-  const oldBoundary = now + 120;
+  const oldBoundary = now - 120;
   let call = 0;
   let writes = 0;
   const client = {

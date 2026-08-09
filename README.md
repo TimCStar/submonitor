@@ -99,6 +99,7 @@ pnpm start
 首次快照只建立基线。正常路径要求：
 
 ```text
+old.reset_at + resetGraceSeconds <= now
 new.reset_at > old.reset_at + resetGraceSeconds
 ```
 
