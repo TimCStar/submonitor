@@ -19,7 +19,7 @@ function snapshot(usedPercent, resetAt, fetchedAt = now) {
   return { usedPercent, resetAt, fetchedAt };
 }
 
-test("reset_at advancement detects low-use and zero-use cycle changes", () => {
+test("reset_at advancement detects used cycles but ignores unused zero-use cycles", () => {
   const oldBoundary = now - 120;
   const newBoundary = oldBoundary + 7 * 24 * 60 * 60;
   assert.equal(
@@ -28,7 +28,7 @@ test("reset_at advancement detects low-use and zero-use cycle changes", () => {
   );
   assert.equal(
     isNaturalReset(snapshot(0, oldBoundary, now - 300), snapshot(0, newBoundary), detectionConfig, now),
-    true,
+    false,
   );
   assert.equal(
     isNaturalReset(snapshot(5, oldBoundary, now - 300), snapshot(0, oldBoundary), detectionConfig, now),

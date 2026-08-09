@@ -66,8 +66,11 @@ export function isNaturalReset(baseline, current, config, nowSeconds = Date.now(
   // actually elapsed, so that rolling timestamps do not create false events.
   const oldWindowElapsed =
     baseline.resetAt > 0 && nowSeconds >= baseline.resetAt + config.resetGraceSeconds;
+  const cycleHadUsage = Number(baseline.usedPercent) > 0;
   const resetAdvanced =
-    oldWindowElapsed && current.resetAt > baseline.resetAt + config.resetGraceSeconds;
+    cycleHadUsage &&
+    oldWindowElapsed &&
+    current.resetAt > baseline.resetAt + config.resetGraceSeconds;
   if (resetAdvanced) return true;
 
   return (
