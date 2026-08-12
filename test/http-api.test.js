@@ -97,6 +97,7 @@ test("public monitoring stays anonymous and sanitized while management requires 
   });
   assert.equal(secondFactorLogin.status, 200);
   const secondFactorCookie = secondFactorLogin.headers.get("set-cookie").split(";", 1)[0];
+  let primaryMonitorId = null;
   for (const name of ["Primary Codex", "Backup Codex"]) {
     const options = name === "Primary Codex"
       ? {
@@ -114,7 +115,15 @@ test("public monitoring stays anonymous and sanitized while management requires 
       body: JSON.stringify({ name, ...options }),
     });
     assert.equal(created.status, 201);
+    if (!primaryMonitorId) primaryMonitorId = (await created.json()).data.id;
   }
+
+  const notifyTest = await fetch(`${baseUrl}/api/monitors/${primaryMonitorId}/notify-test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: secondFactorCookie, Origin: baseUrl },
+    body: JSON.stringify({ channel: "telegram" }),
+  });
+  assert.equal(notifyTest.status, 400);
 
   const publicPayload = await fetch(`${baseUrl}/api/public/dashboard`).then((response) => response.json());
   assert.equal(publicPayload.data.monitors.length, 1);

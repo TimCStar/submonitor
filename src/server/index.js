@@ -52,7 +52,8 @@ function emitUpdate(type, payload) {
   });
 }
 
-const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate, notifier: createNotifier() });
+const notifier = createNotifier();
+const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate, notifier });
 const subscriberPreviewCache = new Map();
 const subscriberPreviewTtlMs = 5 * 60 * 1000;
 
@@ -179,7 +180,7 @@ function adminDashboard() {
 }
 
 function monitorRoute(pathname) {
-  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check|subscribers))?$/);
+  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check|subscribers|notify-test))?$/);
   return match ? { id: decodeURIComponent(match[1]), action: match[2] || null } : null;
 }
 
@@ -341,6 +342,16 @@ async function apiRoute(request, response, url) {
   }
   if (route && request.method === "POST" && route.action === "check") {
     return sendData(response, await schedulers.runNow(route.id, "manual"));
+  }
+  if (route && request.method === "POST" && route.action === "notify-test") {
+    const body = await readJson(request);
+    const config = configStore.getPrivate(route.id);
+    await notifier.testChannel(config, body.channel);
+    database.addAudit("info", "monitor.notify_test", "Test notification sent", {
+      monitorId: route.id,
+      channel: body.channel,
+    });
+    return sendData(response, { sent: true });
   }
   if (route && request.method === "GET" && route.action === "subscribers") {
     return sendData(response, await subscriberPreview(route.id, url.searchParams.get("refresh") === "1"));

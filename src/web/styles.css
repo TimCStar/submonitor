@@ -273,6 +273,7 @@ input::placeholder { color: #9ca3af; }
 .usage-row span { color: var(--muted); font-size: 11px; }
 .progress-track { height: 7px; min-height: 7px; max-height: 7px; overflow: hidden; margin-top: 14px; border-radius: 999px; background: #f1f5f9; }
 .progress-track span { display: block; height: 7px; min-height: 7px; max-height: 7px; min-width: 0; border-radius: inherit; background: var(--teal); transition: width .3s; }
+.sparkline { display: block; width: 100%; height: 34px; margin-top: 12px; color: var(--teal); opacity: .85; }
 .quota-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 11px; border-top: 1px solid #f1f5f9; color: var(--muted); font-size: 11px; }
 .quota-meta span { display: flex; align-items: center; gap: 5px; min-width: 0; }
 

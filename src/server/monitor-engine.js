@@ -155,6 +155,53 @@ export class MonitorEngine {
     }
   }
 
+  async maybeUsageAlert(config, state, selector, snapshot) {
+    if (config.usageAlertPercent <= 0) return;
+    const triggered = snapshot.limitReached || snapshot.usedPercent >= config.usageAlertPercent;
+    if (!triggered) return;
+    const now = Math.floor(Date.now() / 1000);
+    // ponytail: 2h throttle per window, state survives restarts via monitor state
+    if (state.usageAlertAt?.[selector] && now - state.usageAlertAt[selector] < 2 * 60 * 60) return;
+    state.usageAlertAt = { ...state.usageAlertAt, [selector]: now };
+    const results = await this.notifier.notifyUsageAlert(config, {
+      monitorName: config.name,
+      selector,
+      usedPercent: snapshot.usedPercent,
+      limitReached: snapshot.limitReached,
+      resetAt: snapshot.resetAt,
+    });
+    for (const result of results) {
+      this.audit(result.ok ? "info" : "warn", "usage.alert_sent", `Usage threshold alert sent via ${result.channel}`, {
+        selector,
+        channel: result.channel,
+        error: result.error || null,
+      });
+    }
+  }
+
+  async notifyActionFailure(config, event, label, error) {
+    if (!config.notifyEnabled) return;
+    const state = this.database.getMonitorState(config.id);
+    const now = Math.floor(Date.now() / 1000);
+    // ponytail: 2h throttle per event, failed actions retry every poll otherwise
+    if (state.failureAlertAt?.[event.id] && now - state.failureAlertAt[event.id] < 2 * 60 * 60) return;
+    state.failureAlertAt = { ...state.failureAlertAt, [event.id]: now };
+    this.database.saveMonitorState(config.id, state);
+    const results = await this.notifier.notifyActionFailure(config, {
+      monitorName: event.monitorName,
+      eventId: event.id,
+      action: label,
+      error,
+    });
+    for (const result of results) {
+      this.audit(result.ok ? "info" : "warn", "notify.action_failed_alert", `Action failure alert sent via ${result.channel}`, {
+        eventId: event.id,
+        channel: result.channel,
+        error: result.error || null,
+      });
+    }
+  }
+
   async readConcurrency(client, accountId) {
     try {
       const account = await client.getAccount(accountId);
@@ -197,6 +244,7 @@ export class MonitorEngine {
         continue;
       }
       this.database.addSnapshot(config.id, selector, snapshot);
+      await this.maybeUsageAlert(config, state, selector, snapshot);
       const event = this.processWindow(config, state, selector, snapshot);
       if (event) newEvents.push(event);
     }
@@ -331,7 +379,7 @@ export class MonitorEngine {
     }
   }
 
-  async runAction(event, action, label, request) {
+  async runAction(config, event, action, label, request) {
     if (["success", "preview", "skipped"].includes(action.status)) return true;
     action.status = "in_progress";
     action.lastAttemptAt = new Date().toISOString();
@@ -351,6 +399,7 @@ export class MonitorEngine {
       this.database.updateEvent(event);
       this.audit("error", "action.failed", label, { eventId: event.id, error: action.error });
       this.emit("event", event);
+      await this.notifyActionFailure(config, event, label, action.error);
       return false;
     }
   }
@@ -376,6 +425,7 @@ export class MonitorEngine {
     }
 
     const sourceRecovered = await this.runAction(
+      config,
       event,
       event.actions.sourceRecovery,
       `Recovered source account ${event.sourceAccountId}`,
@@ -384,14 +434,14 @@ export class MonitorEngine {
     if (!sourceRecovered) return;
 
     for (const [id, action] of Object.entries(event.actions.targetAccounts)) {
-      await this.runAction(event, action, `Reset target account ${id}`, () =>
+      await this.runAction(config, event, action, `Reset target account ${id}`, () =>
         client.resetTargetAccount(id));
     }
 
     if (!(await this.prepareSubscriptionActions(client, event))) return;
     const resetBody = subscriptionResetBody(event);
     for (const [id, action] of Object.entries(event.actions.subscriptions)) {
-      await this.runAction(event, action, `Reset subscription ${id}`, () =>
+      await this.runAction(config, event, action, `Reset subscription ${id}`, () =>
         client.resetSubscription(id, resetBody));
     }
 

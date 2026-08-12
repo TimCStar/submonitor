@@ -14,6 +14,7 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   confirmationsRequired: 2,
   resetGraceSeconds: 60,
   resetMaxUsedPercent: 20,
+  usageAlertPercent: 80,
   subscriptionGroupMode: "none",
   subscriptionGroupIds: [],
   subscriptionResetWindows: ["weekly"],

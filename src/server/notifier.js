@@ -22,6 +22,32 @@ export function buildResetText(event) {
   return lines.join("\n");
 }
 
+export function buildUsageAlertTitle(monitorName) {
+  return `Codex 额度触顶预警 · ${monitorName}`;
+}
+
+export function buildUsageAlertText({ monitorName, selector, usedPercent, limitReached, resetAt }) {
+  return [
+    `监控：${monitorName}`,
+    `窗口：${selector}`,
+    `使用率：${usedPercent ?? "?"}%${limitReached ? "（已达上限）" : ""}`,
+    `重置：${formatTime(resetAt)}`,
+  ].join("\n");
+}
+
+export function buildActionFailureTitle(monitorName) {
+  return `Codex 重置动作失败 · ${monitorName}`;
+}
+
+export function buildActionFailureText({ monitorName, eventId, action, error }) {
+  return [
+    `监控：${monitorName}`,
+    `事件：${eventId}`,
+    `动作：${action}`,
+    `错误：${error}`,
+  ].join("\n");
+}
+
 export async function sendTelegram({ botToken, chatId }, text, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
     method: "POST",
@@ -84,22 +110,66 @@ export function createNotifier({ fetchImpl = fetch } = {}) {
     }
   }
 
+  async function dispatch(config, title, text) {
+    const results = [];
+    if (config.notifyTelegramEnabled && isChannelConfigured(config, "telegram")) {
+      results.push(await attempt("telegram", () => sendTelegram(
+        { botToken: config.telegramBotToken, chatId: config.telegramChatId },
+        text,
+        { fetchImpl },
+      )));
+    }
+    if (config.notifyBarkEnabled && isChannelConfigured(config, "bark")) {
+      results.push(await attempt("bark", () => sendBark(
+        { server: config.barkServer, key: config.barkKey },
+        title,
+        text,
+        { fetchImpl },
+      )));
+    }
+    if (config.notifyEmailEnabled && isChannelConfigured(config, "email")) {
+      results.push(await attempt("email", () => sendEmail(config, title, text)));
+    }
+    return results;
+  }
+
   return {
     async notifyReset(config, event) {
       if (!config.notifyEnabled) return [];
-      const title = buildResetTitle(event);
-      const text = buildResetText(event);
-      const results = [];
-      if (config.notifyTelegramEnabled && isChannelConfigured(config, "telegram")) {
-        results.push(await attempt("telegram", () => sendTelegram(config, text, { fetchImpl })));
+      return dispatch(config, buildResetTitle(event), buildResetText(event));
+    },
+
+    async notifyUsageAlert(config, data) {
+      if (!config.notifyEnabled) return [];
+      return dispatch(config, buildUsageAlertTitle(data.monitorName), buildUsageAlertText(data));
+    },
+
+    async notifyActionFailure(config, data) {
+      if (!config.notifyEnabled) return [];
+      return dispatch(config, buildActionFailureTitle(data.monitorName), buildActionFailureText(data));
+    },
+
+    async testChannel(config, channel) {
+      if (!config.notifyEnabled) throw new Error("请先启用重置提醒");
+      const message = "SubMonitor 测试消息：通知配置正常";
+      if (channel === "telegram") {
+        if (!config.notifyTelegramEnabled || !isChannelConfigured(config, "telegram")) {
+          throw new Error("请先启用并配置 Telegram 通知");
+        }
+        await sendTelegram({ botToken: config.telegramBotToken, chatId: config.telegramChatId }, message, { fetchImpl });
+      } else if (channel === "bark") {
+        if (!config.notifyBarkEnabled || !isChannelConfigured(config, "bark")) {
+          throw new Error("请先启用并配置 Bark 通知");
+        }
+        await sendBark({ server: config.barkServer, key: config.barkKey }, "SubMonitor 测试", message, { fetchImpl });
+      } else if (channel === "email") {
+        if (!config.notifyEmailEnabled || !isChannelConfigured(config, "email")) {
+          throw new Error("请先启用并配置邮件通知");
+        }
+        await sendEmail(config, "SubMonitor 测试", message);
+      } else {
+        throw new Error(`未知通知渠道：${channel}`);
       }
-      if (config.notifyBarkEnabled && isChannelConfigured(config, "bark")) {
-        results.push(await attempt("bark", () => sendBark(config, title, text, { fetchImpl })));
-      }
-      if (config.notifyEmailEnabled && isChannelConfigured(config, "email")) {
-        results.push(await attempt("email", () => sendEmail(config, title, text)));
-      }
-      return results;
     },
   };
 }

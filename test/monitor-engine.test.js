@@ -285,3 +285,160 @@ test("a confirmed reset notifies before executing actions", async (t) => {
   assert.equal(notified[0].event.window, "7d");
   assert.equal(notified[0].event.baseline.usedPercent, 5);
 });
+
+test("high usage triggers a throttled threshold alert", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-usage-alert-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("usage-alert-test-master-key-with-32-characters"));
+  const monitor = store.create({
+    name: "Alert Codex",
+    baseUrl: "https://sub2api.example.test",
+    authType: "apiKey",
+    authSecret: "secret",
+    sourceAccountId: 12,
+    targetAccountIds: [],
+    monitorWindows: ["7d"],
+    pollIntervalSeconds: 300,
+    requestTimeoutSeconds: 45,
+    confirmationsRequired: 2,
+    resetGraceSeconds: 60,
+    resetMaxUsedPercent: 20,
+    usageAlertPercent: 50,
+    subscriptionGroupMode: "none",
+    subscriptionGroupIds: [],
+    subscriptionResetWindows: ["weekly"],
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "bot-token",
+    telegramChatId: "42",
+    dryRun: true,
+    enabled: false,
+  });
+  const boundary = now + 7 * 24 * 60 * 60;
+  const client = {
+    async queryCodexQuota() {
+      return {
+        fetched_at: Math.floor(Date.now() / 1000),
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          secondary_window: {
+            used_percent: 72,
+            reset_at: boundary,
+            limit_window_seconds: 7 * 24 * 60 * 60,
+          },
+        },
+      };
+    },
+  };
+  const alerts = [];
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+    notifier: {
+      async notifyReset() { return []; },
+      async notifyUsageAlert(config, data) {
+        alerts.push(data);
+        return [{ channel: "telegram", ok: true, error: null }];
+      },
+      async notifyActionFailure() { return []; },
+    },
+  });
+
+  await engine.pollOnce();
+  await engine.pollOnce();
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].usedPercent, 72);
+  assert.equal(alerts[0].selector, "7d");
+
+  const state = database.getMonitorState(monitor.id);
+  state.usageAlertAt = {};
+  database.saveMonitorState(monitor.id, state);
+  await engine.pollOnce();
+  assert.equal(alerts.length, 2);
+});
+
+test("a failed action notifies once and is throttled across retries", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-failure-alert-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("failure-alert-test-master-key-with-32-chars"));
+  const monitor = store.create({
+    name: "Failure Codex",
+    baseUrl: "https://sub2api.example.test",
+    authType: "apiKey",
+    authSecret: "secret",
+    sourceAccountId: 12,
+    targetAccountIds: [],
+    monitorWindows: ["7d"],
+    pollIntervalSeconds: 300,
+    requestTimeoutSeconds: 45,
+    confirmationsRequired: 1,
+    resetGraceSeconds: 60,
+    resetMaxUsedPercent: 20,
+    subscriptionGroupMode: "none",
+    subscriptionGroupIds: [],
+    subscriptionResetWindows: ["weekly"],
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "bot-token",
+    telegramChatId: "42",
+    dryRun: false,
+    enabled: false,
+  });
+  const oldBoundary = now - 120;
+  const newBoundary = oldBoundary + 7 * 24 * 60 * 60;
+  let call = 0;
+  const client = {
+    async queryCodexQuota() {
+      call += 1;
+      return {
+        fetched_at: Math.floor(Date.now() / 1000),
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          secondary_window: {
+            used_percent: call === 1 ? 5 : 0,
+            reset_at: call === 1 ? oldBoundary : newBoundary,
+            limit_window_seconds: 7 * 24 * 60 * 60,
+          },
+        },
+      };
+    },
+    async recoverSourceAccount() {
+      throw new Error("upstream rejected the recovery");
+    },
+  };
+  const failures = [];
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+    notifier: {
+      async notifyReset() { return []; },
+      async notifyUsageAlert() { return []; },
+      async notifyActionFailure(config, data) {
+        failures.push(data);
+        return [{ channel: "telegram", ok: true, error: null }];
+      },
+    },
+  });
+
+  await engine.pollOnce();
+  await engine.pollOnce();
+  await engine.pollOnce();
+  assert.equal(failures.length, 1);
+  assert.match(failures[0].action, /Recovered source account 12/);
+  assert.match(failures[0].error, /upstream rejected/);
+  assert.equal(database.listPendingEvents(monitor.id).length, 1);
+});

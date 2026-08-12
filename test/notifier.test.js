@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildActionFailureText,
   buildResetText,
   buildResetTitle,
+  buildUsageAlertText,
+  buildUsageAlertTitle,
   createNotifier,
   sendBark,
   sendEmail,
@@ -116,6 +119,28 @@ test("notifier dispatches to each configured channel and isolates failures", asy
   assert.match(results[0].error, /nope/);
 });
 
+test("dispatch uses the configured tokens in the real request URLs", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => ({ ok: true, code: 200 }) };
+  };
+  const notifier = createNotifier({ fetchImpl });
+  const config = {
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "real-token",
+    telegramChatId: "42",
+    notifyBarkEnabled: true,
+    barkServer: "https://bark.selfhosted.example",
+    barkKey: "real-key",
+    notifyEmailEnabled: false,
+  };
+  await notifier.notifyReset(config, event);
+  assert.equal(calls[0], "https://api.telegram.org/botreal-token/sendMessage");
+  assert.equal(calls[1], "https://bark.selfhosted.example/push");
+});
+
 test("notifications are skipped when the master switch is off", async () => {
   const notifier = createNotifier({
     fetchImpl: async () => {
@@ -127,4 +152,65 @@ test("notifications are skipped when the master switch is off", async () => {
     event,
   );
   assert.deepEqual(results, []);
+});
+
+test("usage alert and action failure messages include the key details", () => {
+  assert.equal(buildUsageAlertTitle("TEAM"), "Codex 额度触顶预警 · TEAM");
+  const usageText = buildUsageAlertText({ monitorName: "TEAM", selector: "7d", usedPercent: 88, limitReached: false, resetAt: 1786422364 });
+  assert.match(usageText, /TEAM/);
+  assert.match(usageText, /88%/);
+  assert.match(usageText, /7d/);
+  assert.match(buildUsageAlertText({ monitorName: "TEAM", selector: "7d", usedPercent: 100, limitReached: true, resetAt: 0 }), /已达上限/);
+  const failureText = buildActionFailureText({ monitorName: "TEAM", eventId: "e1", action: "Recovered source account 12", error: "boom" });
+  assert.match(failureText, /e1/);
+  assert.match(failureText, /boom/);
+});
+
+test("usage alerts and action failures dispatch through the same channels", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => ({ ok: true, code: 200 }) };
+  };
+  const notifier = createNotifier({ fetchImpl });
+  const config = {
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "t",
+    telegramChatId: "1",
+    notifyBarkEnabled: true,
+    barkKey: "k",
+    notifyEmailEnabled: false,
+  };
+  const usageResults = await notifier.notifyUsageAlert(config, { monitorName: "TEAM", selector: "7d", usedPercent: 88, limitReached: false, resetAt: 0 });
+  assert.deepEqual(usageResults.map((result) => result.channel), ["telegram", "bark"]);
+  const failureResults = await notifier.notifyActionFailure(config, { monitorName: "TEAM", eventId: "e1", action: "x", error: "boom" });
+  assert.deepEqual(failureResults.map((result) => result.channel), ["telegram", "bark"]);
+  assert.equal(calls.length, 4);
+});
+
+test("testChannel sends a probe message and validates the configuration", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ ok: true, code: 200 }) };
+  };
+  const notifier = createNotifier({ fetchImpl });
+  const config = {
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "t",
+    telegramChatId: "1",
+    notifyBarkEnabled: true,
+    barkKey: "k",
+    notifyEmailEnabled: false,
+  };
+  await notifier.testChannel(config, "telegram");
+  await notifier.testChannel(config, "bark");
+  assert.equal(calls.length, 2);
+  assert.equal(JSON.parse(calls[0].options.body).chat_id, "1");
+
+  await assert.rejects(() => notifier.testChannel({ ...config, notifyEnabled: false }, "telegram"), /请先启用重置提醒/);
+  await assert.rejects(() => notifier.testChannel({ ...config, notifyTelegramEnabled: false }, "telegram"), /请先启用并配置 Telegram/);
+  await assert.rejects(() => notifier.testChannel(config, "slack"), /未知通知渠道/);
 });

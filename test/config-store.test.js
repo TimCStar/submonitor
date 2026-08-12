@@ -150,6 +150,7 @@ test("notification credentials stay encrypted, round-trip and can be cleared", (
   });
   const store = new ConfigStore(database, createSecretBox("notify-config-test-master-key-32-characters"));
   const monitor = store.create(validConfig({
+    usageAlertPercent: 90,
     notifyEnabled: true,
     notifyTelegramEnabled: true,
     telegramBotToken: "bot-token",
@@ -166,6 +167,7 @@ test("notification credentials stay encrypted, round-trip and can be cleared", (
   }));
 
   const publicConfig = store.getPublic(monitor.id);
+  assert.equal(publicConfig.usageAlertPercent, 90);
   assert.equal(publicConfig.telegramBotTokenConfigured, true);
   assert.equal(publicConfig.barkKeyConfigured, true);
   assert.equal(publicConfig.emailSmtpPassConfigured, true);

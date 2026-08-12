@@ -134,6 +134,7 @@ export class ConfigStore {
       confirmationsRequired: positiveInteger(input.confirmationsRequired, "confirmationsRequired", 1, 10),
       resetGraceSeconds: positiveInteger(input.resetGraceSeconds, "resetGraceSeconds", 1, 3600),
       resetMaxUsedPercent: numberInRange(input.resetMaxUsedPercent, "resetMaxUsedPercent", 0, 100),
+      usageAlertPercent: numberInRange(input.usageAlertPercent ?? 80, "usageAlertPercent", 0, 100),
       subscriptionGroupMode: groupMode,
       subscriptionGroupIds: groupMode === "explicit" ? ids(input.subscriptionGroupIds || [], "subscriptionGroupIds") : [],
       subscriptionResetWindows: choices(
