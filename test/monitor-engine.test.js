@@ -49,6 +49,23 @@ test("future rolling boundaries from an unused account do not trigger a reset", 
   );
 });
 
+test("a used cycle ending before the old boundary elapses still triggers a reset", () => {
+  const oldBoundary = now + 5 * 60 * 60;
+  const newBoundary = now + 7 * 24 * 60 * 60;
+  assert.equal(
+    isNaturalReset(snapshot(6, oldBoundary, now - 300), snapshot(0, newBoundary), detectionConfig, now),
+    true,
+  );
+  assert.equal(
+    isNaturalReset(snapshot(100, oldBoundary, now - 300), snapshot(0, newBoundary), detectionConfig, now),
+    true,
+  );
+  assert.equal(
+    isNaturalReset(snapshot(0, oldBoundary, now - 300), snapshot(0, newBoundary), detectionConfig, now),
+    false,
+  );
+});
+
 test("confirmed reset recovers source, target and active subscription exactly once", async (t) => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-test-"));
   const database = new AppDatabase(path.join(directory, "test.sqlite"));

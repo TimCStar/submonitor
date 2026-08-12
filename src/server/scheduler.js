@@ -37,7 +37,7 @@ export class MonitorScheduler {
     this.publish();
   }
 
-  reschedule(immediate = false) {
+  reschedule(immediate = false, hasPending = false) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const config = this.configStore.getPublic();
@@ -47,7 +47,10 @@ export class MonitorScheduler {
       this.publish();
       return;
     }
-    const delay = immediate ? 1000 : config.pollIntervalSeconds * 1000;
+    const interval = hasPending
+      ? Math.min(config.pollIntervalSeconds, 300)
+      : config.pollIntervalSeconds;
+    const delay = immediate ? 1000 : interval * 1000;
     this.runtime.status = this.runningPromise ? "running" : this.runtime.lastError ? "error" : "idle";
     this.runtime.nextPollAt = new Date(Date.now() + delay).toISOString();
     this.publish();
@@ -64,8 +67,9 @@ export class MonitorScheduler {
     this.runtime.nextPollAt = null;
     this.publish();
     this.runningPromise = this.engine.pollOnce();
+    let result;
     try {
-      const result = await this.runningPromise;
+      result = await this.runningPromise;
       this.runtime.status = "idle";
       this.runtime.lastSuccessAt = new Date().toISOString();
       this.runtime.lastError = null;
@@ -77,7 +81,7 @@ export class MonitorScheduler {
     } finally {
       this.runningPromise = null;
       this.publish();
-      this.reschedule(false);
+      this.reschedule(false, Boolean(result?.hasPendingCandidate));
     }
   }
 }

@@ -100,11 +100,12 @@ pnpm start
 
 ```text
 old.used_percent > 0
-old.reset_at + resetGraceSeconds <= now
 new.reset_at > old.reset_at + resetGraceSeconds
 ```
 
-默认连续确认两次。使用率、`allowed` 和 `limit_reached` 不参与正常路径判定，因此低使用量或零使用量周期仍会触发。
+有使用量的窗口会报告固定绝对边界，周期结束时边界前进即可识别，即使旧边界尚未到期。空闲窗口的 `reset_at` 是滚动值（约 `now + limit_window_seconds`），每次读取都会前移，因此要求旧周期有使用量来排除滚动边界误报。
+
+默认连续确认两次。`allowed` 和 `limit_reached` 不参与正常路径判定。存在待确认候选时，下一次轮询会缩短到 5 分钟以尽快完成确认，确认或取消后恢复配置的轮询间隔。
 
 当新周期暂时缺少 `reset_at` 时，才使用保守回退：旧边界已过期、当前使用率不高于配置阈值且低于旧使用率。
 

@@ -61,18 +61,20 @@ export function isFreshSnapshot(snapshot, config, nowSeconds = Date.now() / 1000
 
 export function isNaturalReset(baseline, current, config, nowSeconds = Date.now() / 1000) {
   if (!baseline || !isFreshSnapshot(current, config, nowSeconds)) return false;
-  // An unused Codex account can expose a future boundary that moves forward
-  // on each read. Treat a boundary as a reset only after the old window has
-  // actually elapsed, so that rolling timestamps do not create false events.
-  const oldWindowElapsed =
-    baseline.resetAt > 0 && nowSeconds >= baseline.resetAt + config.resetGraceSeconds;
+  // A window with actual usage reports a fixed absolute boundary, so a reset
+  // advances it even before the old boundary elapses. An unused window instead
+  // reports a rolling boundary (~now + window seconds) that moves forward on
+  // every read; requiring prior usage keeps rolling timestamps from creating
+  // false events.
   const cycleHadUsage = Number(baseline.usedPercent) > 0;
   const resetAdvanced =
     cycleHadUsage &&
-    oldWindowElapsed &&
+    baseline.resetAt > 0 &&
     current.resetAt > baseline.resetAt + config.resetGraceSeconds;
   if (resetAdvanced) return true;
 
+  const oldWindowElapsed =
+    baseline.resetAt > 0 && nowSeconds >= baseline.resetAt + config.resetGraceSeconds;
   return (
     oldWindowElapsed &&
     current.resetAt === 0 &&
@@ -178,6 +180,7 @@ export class MonitorEngine {
     return {
       snapshots: this.database.listSnapshots(config.id, 20),
       newEvents: newEvents.map((item) => item.id),
+      hasPendingCandidate: Object.values(state.windows).some((window) => window.pending),
     };
   }
 
