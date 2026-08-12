@@ -276,6 +276,23 @@ input::placeholder { color: #9ca3af; }
 .quota-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 11px; border-top: 1px solid #f1f5f9; color: var(--muted); font-size: 11px; }
 .quota-meta span { display: flex; align-items: center; gap: 5px; min-width: 0; }
 
+.concurrency-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  padding: 13px 18px;
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+  border-radius: 16px;
+  background: var(--amber-soft);
+}
+.concurrency-head { display: flex; align-items: baseline; gap: 7px; }
+.concurrency-head span { font-size: 11px; font-weight: 650; color: var(--amber); }
+.concurrency-head strong { font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--amber); }
+.concurrency-head em { font-style: normal; font-size: 13px; color: var(--amber); opacity: .75; }
+.concurrency-track { flex: 1; height: 7px; overflow: hidden; border-radius: 999px; background: var(--line); }
+.concurrency-track span { display: block; height: 100%; border-radius: inherit; background: var(--amber); transition: width .3s; }
+
 .monitor-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
 .monitor-picker > button {
   min-width: 0;
