@@ -7,6 +7,7 @@ import { ConfigStore } from "./config-store.js";
 import { AppDatabase } from "./database.js";
 import { readJson, sendData, sendError, serveStatic, setSecurityHeaders } from "./http-utils.js";
 import { extractSnapshots } from "./monitor-engine.js";
+import { createNotifier } from "./notifier.js";
 import { SchedulerManager } from "./scheduler.js";
 import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
@@ -51,7 +52,7 @@ function emitUpdate(type, payload) {
   });
 }
 
-const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate });
+const schedulers = new SchedulerManager({ database, configStore, emit: emitUpdate, notifier: createNotifier() });
 const subscriberPreviewCache = new Map();
 const subscriberPreviewTtlMs = 5 * 60 * 1000;
 
@@ -152,6 +153,7 @@ function publicDashboard() {
     targetAccountCount: monitor.targetAccountIds.length,
     subscriptionGroupMode: monitor.subscriptionGroupMode,
     publicSubscriberPreviewEnabled: monitor.publicSubscriberPreviewEnabled !== false,
+    concurrency: database.getMonitorState(monitor.id).concurrency || null,
     runtime: publicRuntime(schedulers.snapshot(monitor.id)),
     candidates: candidateSummary(monitor.id),
     snapshots: database.listSnapshots(monitor.id, 240),

@@ -56,19 +56,32 @@ export class ConfigStore {
 
   toPublic(config) {
     if (!config) return null;
-    const { authSecretCipher, ...safe } = config;
-    let authSecretInvalid = false;
-    if (authSecretCipher) {
+    const {
+      authSecretCipher,
+      telegramBotTokenCipher,
+      barkKeyCipher,
+      emailSmtpPassCipher,
+      ...safe
+    } = config;
+    const invalid = (cipher) => {
+      if (!cipher) return false;
       try {
-        this.secretBox.decrypt(authSecretCipher);
+        this.secretBox.decrypt(cipher);
+        return false;
       } catch {
-        authSecretInvalid = true;
+        return true;
       }
-    }
+    };
     return {
       ...safe,
       authSecretConfigured: Boolean(authSecretCipher),
-      authSecretInvalid,
+      authSecretInvalid: invalid(authSecretCipher),
+      telegramBotTokenConfigured: Boolean(telegramBotTokenCipher),
+      telegramBotTokenInvalid: invalid(telegramBotTokenCipher),
+      barkKeyConfigured: Boolean(barkKeyCipher),
+      barkKeyInvalid: invalid(barkKeyCipher),
+      emailSmtpPassConfigured: Boolean(emailSmtpPassCipher),
+      emailSmtpPassInvalid: invalid(emailSmtpPassCipher),
     };
   }
 
@@ -91,6 +104,9 @@ export class ConfigStore {
     return {
       ...config,
       authSecret: config.authSecretCipher ? this.secretBox.decrypt(config.authSecretCipher) : "",
+      telegramBotToken: config.telegramBotTokenCipher ? this.secretBox.decrypt(config.telegramBotTokenCipher) : "",
+      barkKey: config.barkKeyCipher ? this.secretBox.decrypt(config.barkKeyCipher) : "",
+      emailSmtpPass: config.emailSmtpPassCipher ? this.secretBox.decrypt(config.emailSmtpPassCipher) : "",
     };
   }
 
@@ -126,6 +142,17 @@ export class ConfigStore {
         RESET_WINDOWS,
       ),
       publicSubscriberPreviewEnabled: Boolean(input.publicSubscriberPreviewEnabled ?? current.publicSubscriberPreviewEnabled ?? true),
+      notifyEnabled: Boolean(input.notifyEnabled),
+      notifyTelegramEnabled: Boolean(input.notifyTelegramEnabled),
+      telegramChatId: String(input.telegramChatId ?? "").trim(),
+      notifyBarkEnabled: Boolean(input.notifyBarkEnabled),
+      barkServer: input.barkServer ? normalizeBaseUrl(input.barkServer) : "",
+      notifyEmailEnabled: Boolean(input.notifyEmailEnabled),
+      emailSmtpHost: String(input.emailSmtpHost ?? "").trim(),
+      emailSmtpPort: positiveInteger(input.emailSmtpPort ?? 465, "emailSmtpPort", 1, 65535),
+      emailSmtpUser: String(input.emailSmtpUser ?? "").trim(),
+      emailFrom: String(input.emailFrom ?? "").trim(),
+      emailTo: String(input.emailTo ?? "").trim(),
       dryRun: Boolean(input.dryRun),
       enabled: Boolean(input.enabled),
     };
@@ -133,7 +160,31 @@ export class ConfigStore {
       next.authSecretCipher = this.secretBox.encrypt(String(input.authSecret));
     }
     if (input.clearAuthSecret === true) next.authSecretCipher = "";
+    if (Object.hasOwn(input, "telegramBotToken") && input.telegramBotToken) {
+      next.telegramBotTokenCipher = this.secretBox.encrypt(String(input.telegramBotToken));
+    }
+    if (input.clearTelegramBotToken === true) next.telegramBotTokenCipher = "";
+    if (Object.hasOwn(input, "barkKey") && input.barkKey) {
+      next.barkKeyCipher = this.secretBox.encrypt(String(input.barkKey));
+    }
+    if (input.clearBarkKey === true) next.barkKeyCipher = "";
+    if (Object.hasOwn(input, "emailSmtpPass") && input.emailSmtpPass) {
+      next.emailSmtpPassCipher = this.secretBox.encrypt(String(input.emailSmtpPass));
+    }
+    if (input.clearEmailSmtpPass === true) next.emailSmtpPassCipher = "";
     if (next.authSecretCipher) this.secretBox.decrypt(next.authSecretCipher);
+    if (next.telegramBotTokenCipher) this.secretBox.decrypt(next.telegramBotTokenCipher);
+    if (next.barkKeyCipher) this.secretBox.decrypt(next.barkKeyCipher);
+    if (next.emailSmtpPassCipher) this.secretBox.decrypt(next.emailSmtpPassCipher);
+    if (next.notifyTelegramEnabled && (!next.telegramChatId || !next.telegramBotTokenCipher)) {
+      throw new Error("A Telegram bot token and chat id are required when Telegram notifications are enabled");
+    }
+    if (next.notifyBarkEnabled && !next.barkKeyCipher) {
+      throw new Error("A Bark device key is required when Bark notifications are enabled");
+    }
+    if (next.notifyEmailEnabled && (!next.emailSmtpHost || !next.emailTo)) {
+      throw new Error("An SMTP host and recipient address are required when email notifications are enabled");
+    }
     if (next.enabled && (!next.baseUrl || !next.sourceAccountId || !next.authSecretCipher)) {
       throw new Error("baseUrl, sourceAccountId and an administrator credential are required before enabling monitoring");
     }

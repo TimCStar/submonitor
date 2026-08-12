@@ -1,4 +1,5 @@
 import { Sub2ApiClient } from "./sub2api-client.js";
+import { createNotifier } from "./notifier.js";
 import { discoverSubscriptionGroupIds, listActiveSubscriptions } from "./subscriber-preview.js";
 
 const FIVE_HOURS_SECONDS = 5 * 60 * 60;
@@ -128,12 +129,13 @@ function subscriptionResetBody(event) {
 }
 
 export class MonitorEngine {
-  constructor({ database, configStore, monitorId = null, emit = () => {}, clientFactory }) {
+  constructor({ database, configStore, monitorId = null, emit = () => {}, clientFactory, notifier }) {
     this.database = database;
     this.configStore = configStore;
     this.monitorId = monitorId;
     this.emit = emit;
     this.clientFactory = clientFactory || ((config) => new Sub2ApiClient(config));
+    this.notifier = notifier || createNotifier();
   }
 
   audit(level, action, message, details = {}) {
@@ -142,12 +144,39 @@ export class MonitorEngine {
     this.emit("audit", { level, action, message, details: scopedDetails, createdAt: new Date().toISOString() });
   }
 
+  async notifyReset(config, event) {
+    const results = await this.notifier.notifyReset(config, event);
+    for (const result of results) {
+      this.audit(result.ok ? "info" : "warn", "notify.sent", `Reset notification sent via ${result.channel}`, {
+        eventId: event.id,
+        channel: result.channel,
+        error: result.error || null,
+      });
+    }
+  }
+
+  async readConcurrency(client, accountId) {
+    try {
+      const account = await client.getAccount(accountId);
+      const current = Number(account?.current_concurrency);
+      const max = Number(account?.concurrency);
+      if (!Number.isFinite(current) || !Number.isFinite(max)) return null;
+      return { current, max, updatedAt: new Date().toISOString() };
+    } catch (error) {
+      this.audit("warn", "concurrency.read_failed", "Failed to read account concurrency", {
+        error: errorMessage(error),
+      });
+      return null;
+    }
+  }
+
   async pollOnce() {
     const config = this.configStore.getPrivate();
     if (!this.configStore.isRunnable(config)) throw new Error("Monitor configuration is incomplete");
     const client = this.clientFactory(config);
     await this.resumePendingEvents(config, client);
 
+    const concurrencyPromise = this.readConcurrency(client, config.sourceAccountId);
     const quota = await client.queryCodexQuota(config.sourceAccountId);
     const snapshots = extractSnapshots(quota);
     const state = this.database.getMonitorState(config.id);
@@ -155,6 +184,8 @@ export class MonitorEngine {
       state.sourceAccountId = config.sourceAccountId;
       state.windows = {};
     }
+    const concurrency = await concurrencyPromise;
+    if (concurrency) state.concurrency = concurrency;
     const newEvents = [];
 
     for (const selector of config.monitorWindows) {
@@ -172,7 +203,10 @@ export class MonitorEngine {
     this.database.saveMonitorState(config.id, state);
     this.emit("snapshot", { snapshots: this.database.listSnapshots(config.id, 20) });
 
-    for (const event of newEvents) await this.executeEvent(config, client, event);
+    for (const event of newEvents) {
+      await this.notifyReset(config, event);
+      await this.executeEvent(config, client, event);
+    }
     this.audit("info", "quota.checked", "Codex quota check completed", {
       sourceAccountId: config.sourceAccountId,
       windows: config.monitorWindows,

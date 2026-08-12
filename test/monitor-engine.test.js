@@ -117,6 +117,9 @@ test("confirmed reset recovers source, target and active subscription exactly on
         },
       };
     },
+    async getAccount() {
+      return { current_concurrency: 3, concurrency: 5 };
+    },
     async recoverSourceAccount() { counts.recover += 1; },
     async resetTargetAccount() { counts.target += 1; },
     async listSubscriptions() {
@@ -145,6 +148,8 @@ test("confirmed reset recovers source, target and active subscription exactly on
   assert.equal(events[0].status, "complete");
   assert.equal(events[0].baseline.usedPercent, 5);
   assert.equal(events[0].resetSnapshot.usedPercent, 0);
+  const concurrency = database.getMonitorState(monitor.id).concurrency;
+  assert.deepEqual({ current: concurrency.current, max: concurrency.max }, { current: 3, max: 5 });
 });
 
 test("dry-run event is archived as preview and is never written later", async (t) => {
@@ -204,4 +209,79 @@ test("dry-run event is archived as preview and is never written later", async (t
   await engine.pollOnce();
   assert.equal(writes, 0);
   assert.equal(database.listEventPayloads(100, monitor.id)[0].status, "preview");
+});
+
+test("a confirmed reset notifies before executing actions", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-notify-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("notify-test-master-key-with-at-least-32-characters"));
+  const monitor = store.create({
+    name: "Notify Codex",
+    baseUrl: "https://sub2api.example.test",
+    authType: "apiKey",
+    authSecret: "secret",
+    sourceAccountId: 12,
+    targetAccountIds: [],
+    monitorWindows: ["7d"],
+    pollIntervalSeconds: 300,
+    requestTimeoutSeconds: 45,
+    confirmationsRequired: 1,
+    resetGraceSeconds: 60,
+    resetMaxUsedPercent: 20,
+    subscriptionGroupMode: "none",
+    subscriptionGroupIds: [],
+    subscriptionResetWindows: ["weekly"],
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "bot-token",
+    telegramChatId: "42",
+    dryRun: true,
+    enabled: false,
+  });
+  const oldBoundary = now - 120;
+  const newBoundary = oldBoundary + 7 * 24 * 60 * 60;
+  let call = 0;
+  const client = {
+    async queryCodexQuota() {
+      call += 1;
+      return {
+        fetched_at: Math.floor(Date.now() / 1000),
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          secondary_window: {
+            used_percent: call === 1 ? 5 : 0,
+            reset_at: call === 1 ? oldBoundary : newBoundary,
+            limit_window_seconds: 7 * 24 * 60 * 60,
+          },
+        },
+      };
+    },
+  };
+  const notified = [];
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+    notifier: {
+      async notifyReset(config, event) {
+        notified.push({ config, event });
+        return [{ channel: "telegram", ok: true, error: null }];
+      },
+    },
+  });
+
+  await engine.pollOnce();
+  await engine.pollOnce();
+  await engine.pollOnce();
+
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].config.telegramBotToken, "bot-token");
+  assert.equal(notified[0].event.window, "7d");
+  assert.equal(notified[0].event.baseline.usedPercent, 5);
 });

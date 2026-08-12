@@ -140,3 +140,65 @@ test("public subscriber visibility can be disabled without changing subscription
   assert.equal(monitor.publicSubscriberPreviewEnabled, false);
   assert.equal(store.getPrivate(monitor.id).publicSubscriberPreviewEnabled, false);
 });
+
+test("notification credentials stay encrypted, round-trip and can be cleared", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-notify-config-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("notify-config-test-master-key-32-characters"));
+  const monitor = store.create(validConfig({
+    notifyEnabled: true,
+    notifyTelegramEnabled: true,
+    telegramBotToken: "bot-token",
+    telegramChatId: "42",
+    notifyBarkEnabled: true,
+    barkKey: "bark-key",
+    notifyEmailEnabled: true,
+    emailSmtpHost: "smtp.example.test",
+    emailSmtpPort: 587,
+    emailSmtpUser: "user",
+    emailSmtpPass: "mail-pass",
+    emailFrom: "from@example.test",
+    emailTo: "to@example.test",
+  }));
+
+  const publicConfig = store.getPublic(monitor.id);
+  assert.equal(publicConfig.telegramBotTokenConfigured, true);
+  assert.equal(publicConfig.barkKeyConfigured, true);
+  assert.equal(publicConfig.emailSmtpPassConfigured, true);
+  for (const secret of ["telegramBotToken", "barkKey", "emailSmtpPass", "telegramBotTokenCipher", "barkKeyCipher", "emailSmtpPassCipher"]) {
+    assert.equal(Object.hasOwn(publicConfig, secret), false, `${secret} leaked into public config`);
+  }
+  const stored = database.getMonitor(monitor.id);
+  assert.notEqual(stored.telegramBotTokenCipher, "bot-token");
+  assert.notEqual(stored.barkKeyCipher, "bark-key");
+  assert.notEqual(stored.emailSmtpPassCipher, "mail-pass");
+  const privateConfig = store.getPrivate(monitor.id);
+  assert.equal(privateConfig.telegramBotToken, "bot-token");
+  assert.equal(privateConfig.barkKey, "bark-key");
+  assert.equal(privateConfig.emailSmtpPass, "mail-pass");
+  assert.equal(privateConfig.telegramChatId, "42");
+
+  const full = store.getPublic(monitor.id);
+  store.update(monitor.id, { ...full, notifyTelegramEnabled: false, clearTelegramBotToken: true });
+  assert.equal(store.getPublic(monitor.id).telegramBotTokenConfigured, false);
+  assert.throws(
+    () => store.update(monitor.id, { ...full, notifyTelegramEnabled: true }),
+    /Telegram bot token and chat id are required/,
+  );
+
+  store.update(monitor.id, {
+    ...store.getPublic(monitor.id),
+    notifyBarkEnabled: false,
+    notifyEmailEnabled: false,
+    clearBarkKey: true,
+    clearEmailSmtpPass: true,
+  });
+  const cleared = store.getPublic(monitor.id);
+  assert.equal(cleared.barkKeyConfigured, false);
+  assert.equal(cleared.emailSmtpPassConfigured, false);
+});
+

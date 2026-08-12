@@ -16,6 +16,7 @@ SubMonitor 是面向 Sub2API 的 Codex OAuth 额度周期监控和自动恢复�
 - Sub2API 风格的响应式 React 控制台和 Node.js 后台服务
 - `5h`、`7d`、`primary`、`secondary` 额度窗口
 - 以 `reset_at` 周期推进为主要判据
+- 展示账号实时并发（当前/上限），随每次轮询更新
 - `5% -> 0%`、`0% -> 0%` 均可识别
 - 连续快照确认，避免瞬时数据误判
 - SQLite 基线、事件、动作状态和审计日志
@@ -145,6 +146,16 @@ POST /api/v1/admin/subscriptions/:id/reset-quota
 ```
 
 `reset-quota` 操作的是 Sub2API 本地计数，不会重置目标服务商的真实上游额度。
+
+## 重置提醒
+
+每个监控任务可以在「重置提醒」区域独立配置 Telegram、Bark 和邮件三个通知渠道。识别到自然重置并完成确认后立即推送（先通知、后执行动作），预览模式同样会通知。
+
+- Telegram：填写 Bot Token 和 Chat ID，通过 `https://api.telegram.org/bot<token>/sendMessage` 发送。
+- Bark：填写设备 Key，服务器留空时使用 `https://api.day.app`，可配置自建 Bark 服务器地址。
+- 邮件：通过 SMTP 发送，需要 SMTP 服务器、端口（465 为 SSL，其他端口自动 STARTTLS）、用户名、密码、发件人和收件人；邮件发送使用 `nodemailer`。
+
+通知凭据（Bot Token、Bark Key、SMTP 密码）与 Sub2API 管理凭据一样使用 `SUBMONITOR_MASTER_KEY` 加密保存，浏览器和公开接口只收到"已保存/未保存"状态。单个渠道发送失败不影响其他渠道和轮询流程，失败记录在审计日志（`notify.sent`）。
 
 ## 数据和备份
 

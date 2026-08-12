@@ -87,11 +87,12 @@ export class MonitorScheduler {
 }
 
 export class SchedulerManager {
-  constructor({ database, configStore, emit = () => {}, clientFactory }) {
+  constructor({ database, configStore, emit = () => {}, clientFactory, notifier }) {
     this.database = database;
     this.configStore = configStore;
     this.emit = emit;
     this.clientFactory = clientFactory;
+    this.notifier = notifier;
     this.schedulers = new Map();
   }
 
@@ -103,6 +104,7 @@ export class SchedulerManager {
       monitorId,
       emit: scopedEmit,
       clientFactory: this.clientFactory,
+      notifier: this.notifier,
     });
     return new MonitorScheduler({
       engine,

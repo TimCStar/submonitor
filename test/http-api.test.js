@@ -123,7 +123,7 @@ test("public monitoring stays anonymous and sanitized while management requires 
   assert.equal(publicSubscribers.status, 200);
   assert.equal((await publicSubscribers.json()).data.enabled, false);
   const serialized = JSON.stringify(publicPayload);
-  for (const sensitiveField of ["baseUrl", "authSecret", "authSecretCipher", "targetAccountIds", "subscriptionGroupIds"]) {
+  for (const sensitiveField of ["baseUrl", "authSecret", "authSecretCipher", "telegramBotTokenCipher", "barkKeyCipher", "emailSmtpPassCipher", "targetAccountIds", "subscriptionGroupIds"]) {
     assert.equal(serialized.includes(sensitiveField), false, `${sensitiveField} leaked into public dashboard`);
   }
 
