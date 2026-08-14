@@ -319,16 +319,20 @@ test("high usage triggers a throttled threshold alert", async (t) => {
     enabled: false,
   });
   const boundary = now + 7 * 24 * 60 * 60;
+  let used = 72;
+  let limitReached = false;
+  let resetAt = boundary;
   const client = {
     async queryCodexQuota() {
+      resetAt += 600;
       return {
         fetched_at: Math.floor(Date.now() / 1000),
         rate_limit: {
           allowed: true,
-          limit_reached: false,
+          limit_reached: limitReached,
           secondary_window: {
-            used_percent: 72,
-            reset_at: boundary,
+            used_percent: used,
+            reset_at: resetAt,
             limit_window_seconds: 7 * 24 * 60 * 60,
           },
         },
@@ -356,12 +360,29 @@ test("high usage triggers a throttled threshold alert", async (t) => {
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].usedPercent, 72);
   assert.equal(alerts[0].selector, "7d");
+  assert.equal(alerts[0].kind, "threshold");
+  assert.equal(alerts[0].threshold, 50);
 
-  const state = database.getMonitorState(monitor.id);
-  state.usageAlertAt = {};
-  database.saveMonitorState(monitor.id, state);
+  used = 100;
+  limitReached = true;
   await engine.pollOnce();
   assert.equal(alerts.length, 2);
+  assert.equal(alerts[1].kind, "exhausted");
+
+  await engine.pollOnce();
+  await engine.pollOnce();
+  assert.equal(alerts.length, 2);
+
+  used = 10;
+  limitReached = false;
+  await engine.pollOnce();
+  assert.equal(alerts.length, 2);
+
+  used = 100;
+  await engine.pollOnce();
+  assert.equal(alerts.length, 4);
+  assert.equal(alerts[2].kind, "threshold");
+  assert.equal(alerts[3].kind, "exhausted");
 });
 
 test("a failed action notifies once and is throttled across retries", async (t) => {

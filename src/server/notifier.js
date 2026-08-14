@@ -26,11 +26,24 @@ export function buildUsageAlertTitle(monitorName) {
   return `Codex 额度触顶预警 · ${monitorName}`;
 }
 
-export function buildUsageAlertText({ monitorName, selector, usedPercent, limitReached, resetAt }) {
+export function buildUsageAlertText({ monitorName, selector, usedPercent, threshold, resetAt }) {
   return [
     `监控：${monitorName}`,
     `窗口：${selector}`,
-    `使用率：${usedPercent ?? "?"}%${limitReached ? "（已达上限）" : ""}`,
+    `使用率：${usedPercent ?? "?"}%（达到阈值 ${threshold}%）`,
+    `重置：${formatTime(resetAt)}`,
+  ].join("\n");
+}
+
+export function buildExhaustedTitle(monitorName) {
+  return `Codex 额度已耗尽 · ${monitorName}`;
+}
+
+export function buildExhaustedText({ monitorName, selector, usedPercent, resetAt }) {
+  return [
+    `监控：${monitorName}`,
+    `窗口：${selector}`,
+    `使用率：${usedPercent ?? "?"}%（额度已耗尽）`,
     `重置：${formatTime(resetAt)}`,
   ].join("\n");
 }
@@ -68,7 +81,7 @@ export async function sendBark({ server, key }, title, body, { fetchImpl = fetch
   });
   if (!response.ok) throw new Error(`Bark API returned HTTP ${response.status}`);
   const result = await response.json().catch(() => ({}));
-  if (result.code !== 200) throw new Error(`Bark API rejected the push: ${result.message || "unknown error"}`);
+  if (Number(result.code) !== 200) throw new Error(`Bark API rejected the push: ${result.message || "unknown error"}`);
 }
 
 export async function sendEmail(config, subject, text, { transport } = {}) {
@@ -141,7 +154,10 @@ export function createNotifier({ fetchImpl = fetch } = {}) {
 
     async notifyUsageAlert(config, data) {
       if (!config.notifyEnabled) return [];
-      return dispatch(config, buildUsageAlertTitle(data.monitorName), buildUsageAlertText(data));
+      const exhausted = data.kind === "exhausted";
+      const title = exhausted ? buildExhaustedTitle(data.monitorName) : buildUsageAlertTitle(data.monitorName);
+      const text = exhausted ? buildExhaustedText(data) : buildUsageAlertText(data);
+      return dispatch(config, title, text);
     },
 
     async notifyActionFailure(config, data) {

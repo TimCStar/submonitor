@@ -113,6 +113,24 @@ input, select {
 input:hover, select:hover { border-color: #9ca3af; }
 input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(20, 184, 166, .13); }
 input::placeholder { color: #9ca3af; }
+.password-field { position: relative; }
+.password-field input { width: 100%; padding-right: 38px; }
+.password-toggle {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--faint);
+  background: transparent;
+  cursor: pointer;
+}
+.password-toggle:hover { color: var(--ink); background: rgba(15, 23, 42, .06); }
 .form-error { display: flex; align-items: center; gap: 7px; color: var(--red); font-size: 12px; }
 
 .button {

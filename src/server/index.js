@@ -221,6 +221,9 @@ async function apiRoute(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/auth/session") {
     return sendData(response, { authenticated: auth.isAuthenticated(request) });
   }
+  if (request.method === "GET" && url.pathname === "/api/auth/2fa/status") {
+    return sendData(response, { enabled: auth.isTwoFactorEnabled() });
+  }
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     if (!isSameOrigin(request)) return sendError(response, 403, "Cross-origin request rejected", "ORIGIN_REJECTED");
     const address = request.socket.remoteAddress || "unknown";

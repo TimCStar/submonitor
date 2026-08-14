@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildActionFailureText,
+  buildExhaustedText,
+  buildExhaustedTitle,
   buildResetText,
   buildResetTitle,
   buildUsageAlertText,
@@ -156,11 +158,13 @@ test("notifications are skipped when the master switch is off", async () => {
 
 test("usage alert and action failure messages include the key details", () => {
   assert.equal(buildUsageAlertTitle("TEAM"), "Codex 额度触顶预警 · TEAM");
-  const usageText = buildUsageAlertText({ monitorName: "TEAM", selector: "7d", usedPercent: 88, limitReached: false, resetAt: 1786422364 });
+  const usageText = buildUsageAlertText({ monitorName: "TEAM", selector: "7d", usedPercent: 88, threshold: 80, resetAt: 1786422364 });
   assert.match(usageText, /TEAM/);
   assert.match(usageText, /88%/);
   assert.match(usageText, /7d/);
-  assert.match(buildUsageAlertText({ monitorName: "TEAM", selector: "7d", usedPercent: 100, limitReached: true, resetAt: 0 }), /已达上限/);
+  assert.match(usageText, /阈值 80%/);
+  assert.equal(buildExhaustedTitle("TEAM"), "Codex 额度已耗尽 · TEAM");
+  assert.match(buildExhaustedText({ monitorName: "TEAM", selector: "7d", usedPercent: 100, resetAt: 0 }), /额度已耗尽/);
   const failureText = buildActionFailureText({ monitorName: "TEAM", eventId: "e1", action: "Recovered source account 12", error: "boom" });
   assert.match(failureText, /e1/);
   assert.match(failureText, /boom/);

@@ -19,6 +19,7 @@ async function request(path, options = {}) {
 
 export const api = {
   session: () => request("/api/auth/session"),
+  twoFactorPublicStatus: () => request("/api/auth/2fa/status"),
   login: (password, totp = "") => request("/api/auth/login", { method: "POST", body: JSON.stringify({ password, totp }) }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   twoFactorStatus: () => request("/api/auth/2fa"),

@@ -157,22 +157,46 @@ export class MonitorEngine {
 
   async maybeUsageAlert(config, state, selector, snapshot) {
     if (config.usageAlertPercent <= 0) return;
-    const triggered = snapshot.limitReached || snapshot.usedPercent >= config.usageAlertPercent;
-    if (!triggered) return;
     const now = Math.floor(Date.now() / 1000);
-    // ponytail: 2h throttle per window, state survives restarts via monitor state
-    if (state.usageAlertAt?.[selector] && now - state.usageAlertAt[selector] < 2 * 60 * 60) return;
-    state.usageAlertAt = { ...state.usageAlertAt, [selector]: now };
+    // Edge-triggered: alert once when entering the threshold/exhausted state,
+    // then re-arm when usage falls back below it. Never keyed on reset_at —
+    // an exhausted account reports a rolling boundary that moves every poll.
+    const usedPercent = snapshot.usedPercent;
+    const thresholdHit = usedPercent >= config.usageAlertPercent;
+    const exhausted = snapshot.limitReached || usedPercent >= 100;
+    const alerts = (state.usageAlertAt ||= {});
+    const thresholdKey = `${selector}:threshold`;
+    const exhaustedKey = `${selector}:exhausted`;
+    if (thresholdHit && !alerts[thresholdKey]) {
+      alerts[thresholdKey] = now;
+      await this.sendUsageAlert(config, "threshold", selector, snapshot, {
+        threshold: config.usageAlertPercent,
+      });
+    } else if (!thresholdHit) {
+      delete alerts[thresholdKey];
+    }
+    if (exhausted && !alerts[exhaustedKey]) {
+      alerts[exhaustedKey] = now;
+      await this.sendUsageAlert(config, "exhausted", selector, snapshot, {});
+    } else if (!exhausted) {
+      delete alerts[exhaustedKey];
+    }
+  }
+
+  async sendUsageAlert(config, kind, selector, snapshot, extra) {
     const results = await this.notifier.notifyUsageAlert(config, {
+      kind,
       monitorName: config.name,
       selector,
       usedPercent: snapshot.usedPercent,
       limitReached: snapshot.limitReached,
       resetAt: snapshot.resetAt,
+      ...extra,
     });
     for (const result of results) {
-      this.audit(result.ok ? "info" : "warn", "usage.alert_sent", `Usage threshold alert sent via ${result.channel}`, {
+      this.audit(result.ok ? "info" : "warn", "usage.alert_sent", `Usage alert sent via ${result.channel}`, {
         selector,
+        kind,
         channel: result.channel,
         error: result.error || null,
       });
