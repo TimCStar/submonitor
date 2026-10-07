@@ -68,6 +68,23 @@ export class Sub2ApiClient {
     return this.request("GET", `/api/v1/admin/accounts/${accountId}`);
   }
 
+  getAccountUsage(accountId) {
+    return this.request("GET", `/api/v1/admin/accounts/${accountId}/usage`);
+  }
+
+  getGroup(groupId) {
+    return this.request("GET", `/api/v1/admin/groups/${groupId}`);
+  }
+
+  listGroupAccounts(groupId, page) {
+    const query = new URLSearchParams({ group: String(groupId), page: String(page), page_size: "100", lite: "true" });
+    return this.request("GET", `/api/v1/admin/accounts?${query}`);
+  }
+
+  updateGroupWeeklyLimit(groupId, weeklyLimitUsd) {
+    return this.request("PUT", `/api/v1/admin/groups/${groupId}`, { weekly_limit_usd: weeklyLimitUsd });
+  }
+
   listGroups() {
     return this.request("GET", "/api/v1/admin/groups/all");
   }

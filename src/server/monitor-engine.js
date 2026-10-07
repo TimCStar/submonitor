@@ -1,6 +1,7 @@
 import { Sub2ApiClient } from "./sub2api-client.js";
 import { createNotifier } from "./notifier.js";
 import { discoverSubscriptionGroupIds, listActiveSubscriptions } from "./subscriber-preview.js";
+import { QuotaSharingService } from "./quota-sharing.js";
 
 const FIVE_HOURS_SECONDS = 5 * 60 * 60;
 const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
@@ -136,6 +137,10 @@ export class MonitorEngine {
     this.emit = emit;
     this.clientFactory = clientFactory || ((config) => new Sub2ApiClient(config));
     this.notifier = notifier || createNotifier();
+    this.quotaSharing = new QuotaSharingService({
+      database, configStore, emit,
+      audit: (...args) => this.audit(...args),
+    });
   }
 
   audit(level, action, message, details = {}) {
@@ -241,6 +246,15 @@ export class MonitorEngine {
     }
   }
 
+  async recalculateQuota() {
+    const config = this.configStore.getPrivate();
+    if (!config.quotaSharingEnabled && !config.quotaSharingDisplayEnabled) {
+      throw new Error("请先启用额度均分或总额度显示，并保存配置");
+    }
+    if (!this.configStore.isRunnable(config)) throw new Error("Monitor configuration is incomplete");
+    return { quotaSharing: await this.quotaSharing.refresh(config, this.clientFactory(config), { manual: true }) };
+  }
+
   async pollOnce() {
     const config = this.configStore.getPrivate();
     if (!this.configStore.isRunnable(config)) throw new Error("Monitor configuration is incomplete");
@@ -279,6 +293,9 @@ export class MonitorEngine {
       await this.notifyReset(config, event);
       await this.executeEvent(config, client, event);
     }
+    await this.quotaSharing.refresh(config, client, {
+      force: newEvents.some((event) => event.resetSnapshot?.canonicalName === "7d"),
+    });
     this.audit("info", "quota.checked", "Codex quota check completed", {
       sourceAccountId: config.sourceAccountId,
       windows: config.monitorWindows,

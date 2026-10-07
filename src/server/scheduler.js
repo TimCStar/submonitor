@@ -47,9 +47,12 @@ export class MonitorScheduler {
       this.publish();
       return;
     }
-    const interval = hasPending
+    let interval = hasPending
       ? Math.min(config.pollIntervalSeconds, 300)
       : config.pollIntervalSeconds;
+    if (config.quotaSharingAutoRecalculateEnabled && config.quotaSharingEnabled) {
+      interval = Math.min(interval, config.quotaSharingIntervalSeconds);
+    }
     const delay = immediate ? 1000 : interval * 1000;
     this.runtime.status = this.runningPromise ? "running" : this.runtime.lastError ? "error" : "idle";
     this.runtime.nextPollAt = new Date(Date.now() + delay).toISOString();
@@ -61,12 +64,20 @@ export class MonitorScheduler {
   }
 
   async runNow(trigger = "manual") {
+    return this.runOperation(trigger, () => this.engine.pollOnce());
+  }
+
+  async runQuotaNow() {
+    return this.runOperation("quota-sharing", () => this.engine.recalculateQuota());
+  }
+
+  async runOperation(trigger, operation) {
     if (this.runningPromise) throw new Error("A quota check is already running");
     this.runtime.status = "running";
     this.runtime.lastPollAt = new Date().toISOString();
     this.runtime.nextPollAt = null;
     this.publish();
-    this.runningPromise = this.engine.pollOnce();
+    this.runningPromise = Promise.resolve().then(operation);
     let result;
     try {
       result = await this.runningPromise;
@@ -153,6 +164,12 @@ export class SchedulerManager {
     const scheduler = this.schedulers.get(monitorId);
     if (!scheduler) throw new Error("Monitor not found");
     return scheduler.runNow(trigger);
+  }
+
+  runQuotaNow(monitorId) {
+    const scheduler = this.schedulers.get(monitorId);
+    if (!scheduler) throw new Error("Monitor not found");
+    return scheduler.runQuotaNow();
   }
 
   snapshot(monitorId) {

@@ -34,6 +34,7 @@ export const api = {
   deleteMonitor: (id) => request(`/api/monitors/${encodeURIComponent(id)}`, { method: "DELETE" }),
   testConnection: (id) => request(`/api/monitors/${encodeURIComponent(id)}/test`, { method: "POST" }),
   checkNow: (id) => request(`/api/monitors/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  recalculateQuota: (id) => request(`/api/monitors/${encodeURIComponent(id)}/quota-sharing`, { method: "POST" }),
   notifyTest: (id, channel) => request(`/api/monitors/${encodeURIComponent(id)}/notify-test`, { method: "POST", body: JSON.stringify({ channel }) }),
   subscribers: (id, refresh = false) => request(`/api/monitors/${encodeURIComponent(id)}/subscribers${refresh ? "?refresh=1" : ""}`),
   events: () => request("/api/events?limit=200"),

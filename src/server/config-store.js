@@ -121,6 +121,7 @@ export class ConfigStore {
     const groupMode = ["none", "auto", "explicit"].includes(input.subscriptionGroupMode)
       ? input.subscriptionGroupMode
       : "none";
+    const sharingGroupId = Object.hasOwn(input, "quotaSharingGroupId") ? input.quotaSharingGroupId : current.quotaSharingGroupId;
     const next = {
       ...current,
       name: normalizeName(input.name ?? current.name),
@@ -143,6 +144,13 @@ export class ConfigStore {
         RESET_WINDOWS,
       ),
       publicSubscriberPreviewEnabled: Boolean(input.publicSubscriberPreviewEnabled ?? current.publicSubscriberPreviewEnabled ?? true),
+      quotaSharingEnabled: Boolean(input.quotaSharingEnabled ?? current.quotaSharingEnabled ?? false),
+      quotaSharingGroupId: sharingGroupId ? positiveInteger(sharingGroupId, "quotaSharingGroupId") : null,
+      quotaSharingReserveEnabled: Boolean(input.quotaSharingReserveEnabled ?? current.quotaSharingReserveEnabled ?? false),
+      quotaSharingReservePercent: numberInRange(input.quotaSharingReservePercent ?? current.quotaSharingReservePercent ?? 10, "quotaSharingReservePercent", 0, 90),
+      quotaSharingAutoRecalculateEnabled: Boolean(input.quotaSharingAutoRecalculateEnabled ?? current.quotaSharingAutoRecalculateEnabled ?? false),
+      quotaSharingIntervalSeconds: positiveInteger(input.quotaSharingIntervalSeconds ?? current.quotaSharingIntervalSeconds ?? 300, "quotaSharingIntervalSeconds", 60, 86400),
+      quotaSharingDisplayEnabled: Boolean(input.quotaSharingDisplayEnabled ?? current.quotaSharingDisplayEnabled ?? false),
       notifyEnabled: Boolean(input.notifyEnabled),
       notifyTelegramEnabled: Boolean(input.notifyTelegramEnabled),
       telegramChatId: String(input.telegramChatId ?? "").trim(),
@@ -189,6 +197,14 @@ export class ConfigStore {
     if (next.enabled && (!next.baseUrl || !next.sourceAccountId || !next.authSecretCipher)) {
       throw new Error("baseUrl, sourceAccountId and an administrator credential are required before enabling monitoring");
     }
+    if (next.quotaSharingEnabled && !next.quotaSharingGroupId) {
+      throw new Error("启用额度均分前，请指定专用订阅分组 ID");
+    }
+    if (next.quotaSharingEnabled && this.database.listMonitors().some((monitor) =>
+      monitor.id !== next.id && monitor.quotaSharingEnabled &&
+      monitor.baseUrl === next.baseUrl && monitor.quotaSharingGroupId === next.quotaSharingGroupId)) {
+      throw new Error("该分组已有额度均分任务，请勿重复分配同一额度池");
+    }
     return next;
   }
 
@@ -214,6 +230,12 @@ export class ConfigStore {
       current.sourceAccountId !== next.sourceAccountId ||
       JSON.stringify(current.monitorWindows) !== JSON.stringify(next.monitorWindows);
     this.database.saveMonitor(id, next);
+    const sharingFields = ["baseUrl", "sourceAccountId", "authSecretCipher", "quotaSharingEnabled", "quotaSharingGroupId",
+      "quotaSharingReserveEnabled", "quotaSharingReservePercent", "quotaSharingAutoRecalculateEnabled",
+      "quotaSharingIntervalSeconds", "quotaSharingDisplayEnabled", "dryRun"];
+    if (sharingFields.some((key) => current[key] !== next[key])) {
+      this.database.setSetting(`quota_sharing:${id}`, null);
+    }
     let cancelledEvents = 0;
     if (baselineChanged) {
       this.database.clearMonitorState(id, next.sourceAccountId);

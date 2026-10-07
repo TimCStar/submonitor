@@ -265,6 +265,7 @@ function Overview({ data, selectedId, onSelectMonitor, onSelectEvent, now, onAdm
       <section><div className="section-heading"><div><span className="eyebrow">CODEX OAUTH</span><h2>{monitor.name}</h2></div><div className="monitor-title-meta"><RuntimeBadge monitor={monitor} /><span className="source-id">源账号 #{monitor.sourceAccountId || "--"}</span></div></div>
         <div className="quota-grid">{monitor.monitorWindows.map((selector) => <QuotaPanel key={selector} selector={selector} snapshot={latest[selector]} now={now} candidate={monitor.candidates?.[selector]} series={monitor.snapshots.filter((snapshot) => snapshot.selector === selector).map((snapshot) => snapshot.usedPercent).reverse()} />)}</div>
         {monitor.concurrency && <div className="concurrency-card"><div className="concurrency-head"><span>实时并发</span><strong>{monitor.concurrency.current}</strong><em>/ {monitor.concurrency.max}</em></div><div className="concurrency-track"><span style={{ width: `${Math.min(100, (monitor.concurrency.current / Math.max(1, monitor.concurrency.max)) * 100)}%` }} /></div></div>}
+        {monitor.quotaSharing && <QuotaSharingPanel quota={monitor.quotaSharing} />}
       </section>
       <section className="metrics-band"><div><span>运行模式</span><strong>{monitor.dryRun ? "预览" : "自动执行"}</strong></div><div><span>确认次数</span><strong>{monitor.confirmationsRequired} 次</strong></div><div><span>轮询间隔</span><strong>{monitor.pollIntervalSeconds} 秒</strong></div><div><span>目标账号</span><strong>{monitor.targetAccountCount}</strong></div><div><span>上次检查</span><strong>{formatDate(monitor.runtime.lastPollAt)}</strong></div></section>
       <PublicSubscriberPreview monitor={monitor} />
@@ -285,6 +286,29 @@ function AuditPage({ entries }) {
 
 function Toggle({ checked, onChange, label }) {
   return <button type="button" className={`toggle ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}><span /><strong>{label}</strong></button>;
+}
+
+function quotaMoney(value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value) : "--";
+}
+
+function QuotaSharingPanel({ quota, admin = false }) {
+  const data = quota || { status: "waiting", note: "等待首次额度采样" };
+  const statuses = { waiting: "等待采样", ready: "已估算", preview: "预览", applied: "已同步", unchanged: "无需调整", blocked: "未调整", error: "重算失败" };
+  return <article className="quota-sharing-panel" aria-label="预估周总额度">
+    <div className="quota-sharing-heading"><div><span className="eyebrow">WEEKLY BUDGET</span><h3>预估周总额度</h3></div><span className={`availability ${["error", "blocked"].includes(data.status) ? "limited" : "online"}`}>{statuses[data.status] || "等待采样"}</span></div>
+    <div className="quota-sharing-metrics">
+      <div><span>账号预估总额度</span><strong>{quotaMoney(data.estimatedTotalUsd)}</strong></div>
+      <div><span>可分配额度{typeof data.reservePercent === "number" ? ` · 预留 ${data.reservePercent}%` : ""}</span><strong>{quotaMoney(data.distributableTotalUsd)}</strong></div>
+      <div><span>有效订阅用户</span><strong>{data.subscriberCount ?? "--"}<small> 人</small></strong></div>
+      <div><span>建议每人周上限</span><strong>{quotaMoney(data.recommendedWeeklyLimitUsd)}</strong></div>
+      <div><span>当前每人周上限</span><strong>{quotaMoney(data.currentWeeklyLimitUsd)}</strong></div>
+    </div>
+    <p className="quota-sharing-note">{data.note || "按本周期使用率和费用估算，额度可能变化"}{data.estimatedUserTotalUsd !== undefined && Math.abs(data.estimatedUserTotalUsd - data.estimatedTotalUsd) > 0.01 && <span> · 用户计费口径总额度 {quotaMoney(data.estimatedUserTotalUsd)}</span>}</p>
+    {admin && data.lastError && <p className="form-error">{data.lastError}</p>}
+    <div className="quota-sharing-footer"><span>更新 {formatDate(data.checkedAt, true)}</span><span>周期重置 {formatDate(data.cycleResetAt)}</span></div>
+  </article>;
 }
 
 function TwoFactorSettings({ notify }) {
@@ -484,7 +508,7 @@ function PasswordInput({ value, onChange, placeholder, autoComplete, ...rest }) 
 function MonitorForm({ monitor, onSaved, onDeleted, notify }) {
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState("");
-  useEffect(() => setForm({ ...monitor, authSecret: "", targetAccountIdsText: monitor.targetAccountIds.join(", "), subscriptionGroupIdsText: monitor.subscriptionGroupIds.join(", ") }), [monitor]);
+  useEffect(() => setForm({ ...monitor, authSecret: "", targetAccountIdsText: monitor.targetAccountIds.join(", "), subscriptionGroupIdsText: monitor.subscriptionGroupIds.join(", ") }), [monitor.id, monitor.updatedAt]);
   if (!form) return null;
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const payload = () => ({ ...form, targetAccountIds: numberList(form.targetAccountIdsText), subscriptionGroupIds: numberList(form.subscriptionGroupIdsText) });
@@ -507,6 +531,15 @@ function MonitorForm({ monitor, onSaved, onDeleted, notify }) {
     catch (error) { notify("error", error.message); }
     finally { setBusy(""); }
   }
+  async function recalculateQuota() {
+    setBusy("quota-sharing");
+    try {
+      const result = await api.recalculateQuota(monitor.id);
+      await onSaved();
+      notify(result.quotaSharing?.status === "blocked" ? "error" : "success", result.quotaSharing?.note || "额度重算完成");
+    } catch (error) { notify("error", error.message); }
+    finally { setBusy(""); }
+  }
   async function testChannel(channel) {
     setBusy(`notify-${channel}`);
     try { await api.notifyTest(monitor.id, channel); notify("success", "测试消息已发送"); }
@@ -525,6 +558,18 @@ function MonitorForm({ monitor, onSaved, onDeleted, notify }) {
     <section className="form-section"><div className="form-section-title"><ServerCog size={19} /><div><h3>Sub2API 连接</h3><span>任务独立凭据</span></div></div><div className="form-grid"><label className="field wide"><span>任务名称</span><input value={form.name} maxLength="80" onChange={(e) => update("name", e.target.value)} /></label><label className="field wide"><span>服务地址</span><input type="url" value={form.baseUrl} onChange={(e) => update("baseUrl", e.target.value)} placeholder="https://sub2api.example.com" /></label><label className="field"><span>认证方式</span><select value={form.authType} onChange={(e) => update("authType", e.target.value)}><option value="apiKey">API Key</option><option value="jwt">管理员 JWT</option></select></label><label className="field wide"><span>管理凭据 {monitor.authSecretConfigured && <em className={monitor.authSecretInvalid ? "invalid" : ""}>{monitor.authSecretInvalid ? "需要重新输入" : "已保存"}</em>}</span><PasswordInput value={form.authSecret} onChange={(e) => update("authSecret", e.target.value)} placeholder={monitor.authSecretInvalid ? "重新输入 API Key 或 JWT" : monitor.authSecretConfigured ? "留空保持不变" : "输入管理凭据"} autoComplete="new-password" />{monitor.authSecretInvalid && <small className="field-warning"><AlertCircle size={14} />当前主密钥无法解密此凭据，请重新输入并保存</small>}</label></div></section>
     <section className="form-section"><div className="form-section-title"><CircleGauge size={19} /><div><h3>额度监控</h3><span>Codex OAuth</span></div></div><div className="form-grid"><label className="field"><span>源账号 ID</span><input type="number" min="1" value={form.sourceAccountId || ""} onChange={(e) => update("sourceAccountId", e.target.value)} /></label><label className="field wide"><span>目标账号 ID</span><input value={form.targetAccountIdsText} onChange={(e) => update("targetAccountIdsText", e.target.value)} placeholder="34, 35" /></label><div className="field wide"><span>监控窗口</span><ChoiceButtons values={["5h", "7d", "primary", "secondary"]} selected={form.monitorWindows} onChange={(value) => update("monitorWindows", value)} /></div><label className="field"><span>轮询间隔（秒）</span><input type="number" min="15" value={form.pollIntervalSeconds} onChange={(e) => update("pollIntervalSeconds", e.target.value)} /></label><label className="field"><span>连续确认次数</span><input type="number" min="1" max="10" value={form.confirmationsRequired} onChange={(e) => update("confirmationsRequired", e.target.value)} /></label><label className="field"><span>触顶预警（%）</span><input type="number" min="0" max="100" value={form.usageAlertPercent} onChange={(e) => update("usageAlertPercent", e.target.value)} /><small>使用率达到该值或上游限流时提醒，0 关闭</small></label><label className="field"><span>请求超时（秒）</span><input type="number" min="5" value={form.requestTimeoutSeconds} onChange={(e) => update("requestTimeoutSeconds", e.target.value)} /></label><label className="field"><span>周期容差（秒）</span><input type="number" min="1" value={form.resetGraceSeconds} onChange={(e) => update("resetGraceSeconds", e.target.value)} /></label></div></section>
     <section className="form-section"><div className="form-section-title"><UsersRound size={19} /><div><h3>订阅级联</h3><span>有效用户订阅</span></div></div><div className="subscription-config"><div className="form-grid"><label className="field"><span>分组来源</span><select value={form.subscriptionGroupMode} onChange={(e) => update("subscriptionGroupMode", e.target.value)}><option value="none">关闭</option><option value="auto">源账号自动发现</option><option value="explicit">指定分组</option></select></label>{form.subscriptionGroupMode === "explicit" && <label className="field wide"><span>订阅分组 ID</span><input value={form.subscriptionGroupIdsText} onChange={(e) => update("subscriptionGroupIdsText", e.target.value)} placeholder="10, 11" /></label>}<div className="field wide"><span>重置周期</span><ChoiceButtons values={["daily", "weekly", "monthly"]} selected={form.subscriptionResetWindows} onChange={(value) => update("subscriptionResetWindows", value)} /></div><div className="field wide setting-toggle"><Toggle checked={form.publicSubscriberPreviewEnabled !== false} onChange={(value) => update("publicSubscriberPreviewEnabled", value)} label="首页显示订阅用户" /><small>关闭后公开首页不会读取或展示订阅用户</small></div></div><SubscriberPreview monitor={monitor} visible={form.subscriptionGroupMode !== "none"} /></div></section>
+    <section className="form-section"><div className="form-section-title"><CircleGauge size={19} /><div><h3>周额度均分</h3><span>可选的专用分组预算</span></div></div><div className="subscription-config"><div className="form-grid">
+      <div className="field wide setting-toggle"><Toggle checked={form.quotaSharingEnabled} onChange={(value) => update("quotaSharingEnabled", value)} label="启用专用分组额度均分" /><small>一账号对应一个专用订阅分组，统一周上限并保留已用额度；关闭后保留最后同步的上限</small></div>
+      {form.quotaSharingEnabled && <label className="field"><span>专用订阅分组 ID</span><input type="number" min="1" required value={form.quotaSharingGroupId || ""} onChange={(e) => update("quotaSharingGroupId", e.target.value)} /></label>}
+      <div className="field wide setting-toggle"><Toggle checked={form.quotaSharingReserveEnabled} onChange={(value) => update("quotaSharingReserveEnabled", value)} label="启用额度预留" /><small>从用户计费口径的预估总额度中扣除预留份额</small></div>
+      {form.quotaSharingReserveEnabled && <label className="field"><span>预留比例（%）</span><input type="number" min="0" max="90" step="0.1" required value={form.quotaSharingReservePercent} onChange={(e) => update("quotaSharingReservePercent", e.target.value)} /></label>}
+      <div className="field wide setting-toggle"><Toggle checked={form.quotaSharingAutoRecalculateEnabled} onChange={(value) => update("quotaSharingAutoRecalculateEnabled", value)} label="定时重算并同步" /><small>需要启用额度均分和监控；关闭后只预估，可手动同步。预览模式不执行写操作</small></div>
+      {form.quotaSharingAutoRecalculateEnabled && <label className="field"><span>重算间隔（秒）</span><input type="number" min="60" max="86400" required value={form.quotaSharingIntervalSeconds} onChange={(e) => update("quotaSharingIntervalSeconds", e.target.value)} /></label>}
+      <div className="field wide setting-toggle"><Toggle checked={form.quotaSharingDisplayEnabled} onChange={(value) => update("quotaSharingDisplayEnabled", value)} label="首页显示预估总额度" /><small>可独立启用；展示预估总额、可分配额度、用户人数和每人周上限</small></div>
+    </div>
+      <div className="quota-sharing-actions"><small>使用率达到 5% 后估算；保存配置后重算。预算不足或数据异常时保留现有限额</small><button type="button" className="button secondary" onClick={recalculateQuota} disabled={busy || (!monitor.quotaSharingEnabled && !monitor.quotaSharingDisplayEnabled) || !monitor.authSecretConfigured || monitor.authSecretInvalid}>{busy === "quota-sharing" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{monitor.quotaSharingEnabled && !monitor.dryRun ? "立即重算并同步" : "刷新额度预估"}</button></div>
+      {(monitor.quotaSharingEnabled || monitor.quotaSharingDisplayEnabled) && <QuotaSharingPanel quota={monitor.quotaSharing} admin />}
+    </div></section>
     <section className="form-section"><div className="form-section-title"><BellRing size={19} /><div><h3>重置提醒</h3><span>Telegram / Bark / 邮件</span></div></div><div className="form-grid"><div className="field wide setting-toggle"><Toggle checked={form.notifyEnabled} onChange={(value) => update("notifyEnabled", value)} label="启用重置提醒" /><small>识别到自然重置后实时推送</small></div><div className="field wide setting-toggle"><Toggle checked={form.notifyTelegramEnabled} onChange={(value) => update("notifyTelegramEnabled", value)} label="Telegram" /><small>Bot 推送到指定会话</small><button type="button" className="text-button" onClick={() => testChannel("telegram")} disabled={busy === "notify-telegram"}>发送测试</button></div><label className="field"><span>Bot Token <SavedBadge configured={form.telegramBotTokenConfigured} invalid={form.telegramBotTokenInvalid} onClear={() => { update("clearTelegramBotToken", true); update("notifyTelegramEnabled", false); update("telegramBotTokenConfigured", false); }} /></span><PasswordInput value={form.telegramBotToken || ""} onChange={(e) => update("telegramBotToken", e.target.value)} placeholder={form.telegramBotTokenConfigured ? "留空保持不变" : "输入 Bot Token"} autoComplete="new-password" /></label><label className="field"><span>Chat ID</span><input value={form.telegramChatId || ""} onChange={(e) => update("telegramChatId", e.target.value)} placeholder="123456789" /></label><div className="field wide setting-toggle"><Toggle checked={form.notifyBarkEnabled} onChange={(value) => update("notifyBarkEnabled", value)} label="Bark" /><small>iOS 推送，默认服务器 https://api.day.app</small><button type="button" className="text-button" onClick={() => testChannel("bark")} disabled={busy === "notify-bark"}>发送测试</button></div><label className="field"><span>Bark 服务器</span><input value={form.barkServer || ""} onChange={(e) => update("barkServer", e.target.value)} placeholder="留空使用 https://api.day.app" /></label><label className="field"><span>设备 Key <SavedBadge configured={form.barkKeyConfigured} invalid={form.barkKeyInvalid} onClear={() => { update("clearBarkKey", true); update("notifyBarkEnabled", false); update("barkKeyConfigured", false); }} /></span><PasswordInput value={form.barkKey || ""} onChange={(e) => update("barkKey", e.target.value)} placeholder={form.barkKeyConfigured ? "留空保持不变" : "输入设备 Key"} autoComplete="new-password" /></label><div className="field wide setting-toggle"><Toggle checked={form.notifyEmailEnabled} onChange={(value) => update("notifyEmailEnabled", value)} label="邮件" /><small>通过 SMTP 发送</small><button type="button" className="text-button" onClick={() => testChannel("email")} disabled={busy === "notify-email"}>发送测试</button></div><label className="field"><span>SMTP 服务器</span><input value={form.emailSmtpHost || ""} onChange={(e) => update("emailSmtpHost", e.target.value)} placeholder="smtp.example.com" /></label><label className="field"><span>端口</span><input type="number" min="1" max="65535" value={form.emailSmtpPort} onChange={(e) => update("emailSmtpPort", e.target.value)} /></label><label className="field"><span>SMTP 用户名</span><input value={form.emailSmtpUser || ""} onChange={(e) => update("emailSmtpUser", e.target.value)} autoComplete="off" /></label><label className="field"><span>SMTP 密码 <SavedBadge configured={form.emailSmtpPassConfigured} invalid={form.emailSmtpPassInvalid} onClear={() => { update("clearEmailSmtpPass", true); update("notifyEmailEnabled", false); update("emailSmtpPassConfigured", false); }} /></span><PasswordInput value={form.emailSmtpPass || ""} onChange={(e) => update("emailSmtpPass", e.target.value)} placeholder={form.emailSmtpPassConfigured ? "留空保持不变" : "输入 SMTP 密码"} autoComplete="new-password" /></label><label className="field"><span>发件人</span><input type="email" value={form.emailFrom || ""} onChange={(e) => update("emailFrom", e.target.value)} placeholder="monitor@example.com" /></label><label className="field"><span>收件人</span><input type="email" value={form.emailTo || ""} onChange={(e) => update("emailTo", e.target.value)} placeholder="you@example.com" /></label></div></section>
     <section className="form-section mode-section"><div><Toggle checked={form.dryRun} onChange={(value) => update("dryRun", value)} label="预览模式" /><small>确认事件不执行写操作</small></div><div><Toggle checked={form.enabled} onChange={(value) => update("enabled", value)} label="启用监控" /><small>后台按轮询间隔运行</small></div></section>
   </form>;
@@ -606,7 +651,7 @@ export default function App() {
     if (!authenticated) return undefined;
     const stream = new EventSource("/api/stream");
     const refresh = () => { clearTimeout(refreshTimer.current); refreshTimer.current = setTimeout(() => { void loadPublic(); void loadAdmin(); }, 200); };
-    ["runtime", "snapshot", "event", "audit", "config"].forEach((type) => stream.addEventListener(type, refresh));
+    ["runtime", "snapshot", "event", "audit", "config", "quota-sharing"].forEach((type) => stream.addEventListener(type, refresh));
     return () => stream.close();
   }, [authenticated, loadAdmin, loadPublic]);
 

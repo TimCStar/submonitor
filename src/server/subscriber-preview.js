@@ -21,15 +21,31 @@ export async function discoverSubscriptionGroupIds(client, config) {
     .map((group) => Number(group.id));
 }
 
-export async function listActiveSubscriptions(client, groupId) {
+export async function listActiveSubscriptions(client, groupId, { strict = false } = {}) {
   const subscriptions = [];
   let page = 1;
+  let itemCount = 0;
   for (;;) {
     const result = await client.listSubscriptions(groupId, page);
+    if (strict && (!Array.isArray(result?.items) || !Number.isInteger(Number(result?.pages)) ||
+        Number(result.pages) < page || Number(result.pages) > 1000)) {
+      throw new Error("订阅分页数据异常，无法完整统计均分人数");
+    }
     const items = Array.isArray(result?.items) ? result.items : [];
+    if (strict && items.some((sub) => !sub ||
+        (sub.expires_at && !Number.isFinite(Date.parse(sub.expires_at))) ||
+        (sub.starts_at && !Number.isFinite(Date.parse(sub.starts_at))))) {
+      throw new Error("订阅有效期数据异常，保留现有额度");
+    }
+    itemCount += items.length;
     subscriptions.push(...items.filter(subscriptionIsActive));
     const pages = Number(result?.pages) || 1;
-    if (page >= pages) break;
+    if (page >= pages) {
+      if (strict && result.total !== undefined && Number(result.total) !== itemCount) {
+        throw new Error("订阅列表不完整，无法准确统计均分人数");
+      }
+      break;
+    }
     page += 1;
   }
   return subscriptions;

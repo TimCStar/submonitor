@@ -19,6 +19,13 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   subscriptionGroupIds: [],
   subscriptionResetWindows: ["weekly"],
   publicSubscriberPreviewEnabled: true,
+  quotaSharingEnabled: false,
+  quotaSharingGroupId: null,
+  quotaSharingReserveEnabled: false,
+  quotaSharingReservePercent: 10,
+  quotaSharingAutoRecalculateEnabled: false,
+  quotaSharingIntervalSeconds: 300,
+  quotaSharingDisplayEnabled: false,
   notifyEnabled: false,
   notifyTelegramEnabled: false,
   telegramBotTokenCipher: "",
@@ -208,6 +215,7 @@ export class AppDatabase {
       this.db.prepare("DELETE FROM quota_snapshots WHERE monitor_id = ?").run(id);
       this.db.prepare("DELETE FROM reset_events WHERE monitor_id = ?").run(id);
       this.db.prepare("DELETE FROM settings WHERE key = ?").run(`monitor_state:${id}`);
+      this.db.prepare("DELETE FROM settings WHERE key = ?").run(`quota_sharing:${id}`);
       const result = this.db.prepare("DELETE FROM monitors WHERE id = ?").run(id);
       this.db.exec("COMMIT");
       return result.changes > 0;

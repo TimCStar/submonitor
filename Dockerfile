@@ -13,6 +13,9 @@ COPY index.html vite.config.js ./
 COPY src/web ./src/web
 RUN pnpm build
 
+FROM build AS production-dependencies
+RUN pnpm prune --prod
+
 FROM node:24-alpine AS runtime
 
 ENV NODE_ENV=production \
@@ -23,6 +26,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src/server ./src/server
 COPY --from=build /app/dist ./dist
+COPY --from=production-dependencies /app/node_modules ./node_modules
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 EXPOSE 8787

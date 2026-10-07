@@ -36,6 +36,22 @@ test("an idle poll keeps the configured 900 second interval", async () => {
   scheduler.stop();
 });
 
+test("optional sharing timer shortens polling but manual mode keeps the normal interval", async () => {
+  let automatic = true;
+  const scheduler = new MonitorScheduler({
+    configStore: { getPublic: () => ({ enabled: true, pollIntervalSeconds: 900,
+      quotaSharingEnabled: true, quotaSharingAutoRecalculateEnabled: automatic, quotaSharingIntervalSeconds: 120 }) },
+    engine: { async pollOnce() { return {}; }, async recalculateQuota() { return { quotaSharing: { status: "preview" } }; } },
+  });
+  try {
+    await scheduler.runNow();
+    assert.ok(Math.abs(nextDelaySeconds(scheduler) - 120) < 5);
+    automatic = false;
+    assert.equal((await scheduler.runQuotaNow()).quotaSharing.status, "preview");
+    assert.ok(Math.abs(nextDelaySeconds(scheduler) - 900) < 5);
+  } finally { scheduler.stop(); }
+});
+
 test("a failed poll falls back to the configured interval", async () => {
   const configStore = { getPublic: () => ({ enabled: true, pollIntervalSeconds: 900 }) };
   const engine = {
@@ -47,5 +63,19 @@ test("a failed poll falls back to the configured interval", async () => {
   await assert.rejects(() => scheduler.runNow("schedule"), /boom/);
   const delay = nextDelaySeconds(scheduler);
   assert.ok(delay >= 895 && delay <= 905, `expected ~900s, got ${delay}s`);
+  scheduler.stop();
+});
+
+test("manual recalculation and quota polling share the same running lock", async () => {
+  let finish;
+  const scheduler = new MonitorScheduler({
+    configStore: { getPublic: () => ({ enabled: false, pollIntervalSeconds: 300 }) },
+    engine: { recalculateQuota: () => new Promise((resolve) => { finish = resolve; }), pollOnce: () => assert.fail("must not poll concurrently") },
+  });
+  const running = scheduler.runQuotaNow();
+  await Promise.resolve();
+  await assert.rejects(scheduler.runNow(), /already running/);
+  finish({ quotaSharing: { status: "preview" } });
+  await running;
   scheduler.stop();
 });

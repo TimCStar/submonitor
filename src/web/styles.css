@@ -629,6 +629,20 @@ th:last-child, td:last-child { width: 38px; padding-left: 4px; padding-right: 10
 }
 
 .topbar-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.quota-sharing-panel { margin-top: 18px; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.quota-sharing-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.quota-sharing-heading h3 { margin: 4px 0 0; font-size: 17px; }
+.quota-sharing-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 18px; margin: 24px 0 18px; }
+.quota-sharing-metrics > div { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.quota-sharing-metrics span, .quota-sharing-note, .quota-sharing-footer, .quota-sharing-actions small { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.quota-sharing-metrics strong { font-size: 22px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.quota-sharing-metrics strong small { font-size: 12px; font-weight: 500; }
+.quota-sharing-note { margin: 0 0 12px; }
+.quota-sharing-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.quota-sharing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; }
+.subscription-config .quota-sharing-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 820px) { .quota-sharing-metrics, .subscription-config .quota-sharing-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .quota-sharing-panel { padding: 16px; } .quota-sharing-actions { flex-direction: column; align-items: stretch; } .quota-sharing-metrics strong { font-size: 20px; } }
 .theme-switcher { min-width: 0; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; padding: 3px; background: #f3f4f6; }
 .theme-choice { min-width: 34px; height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 650; white-space: nowrap; }
 .theme-choice:hover { color: var(--ink); }

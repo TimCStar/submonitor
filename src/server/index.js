@@ -13,6 +13,7 @@ import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
 import { Sub2ApiClient } from "./sub2api-client.js";
 import { buildSubscriberPreview, toPublicSubscriberPreview } from "./subscriber-preview.js";
+import { publicQuotaSharing } from "./quota-sharing.js";
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(serverDirectory, "../..");
@@ -44,6 +45,7 @@ const auth = new AuthService({
 });
 
 function emitUpdate(type, payload) {
+  if (type === "quota-sharing") subscriberPreviewCache.delete(payload?.monitorId);
   adminBroker.emit(type, payload);
   publicBroker.emit("refresh", {
     type,
@@ -155,6 +157,7 @@ function publicDashboard() {
     subscriptionGroupMode: monitor.subscriptionGroupMode,
     publicSubscriberPreviewEnabled: monitor.publicSubscriberPreviewEnabled !== false,
     concurrency: database.getMonitorState(monitor.id).concurrency || null,
+    quotaSharing: publicQuotaSharing(monitor, database.getSetting(`quota_sharing:${monitor.id}`)),
     runtime: publicRuntime(schedulers.snapshot(monitor.id)),
     candidates: candidateSummary(monitor.id),
     snapshots: database.listSnapshots(monitor.id, 240),
@@ -172,6 +175,7 @@ function adminDashboard() {
     monitors: configStore.listPublic().map((monitor) => ({
       ...monitor,
       runtime: schedulers.snapshot(monitor.id),
+      quotaSharing: database.getSetting(`quota_sharing:${monitor.id}`),
       snapshots: database.listSnapshots(monitor.id, 40),
     })),
     events: database.listEventPayloads(100),
@@ -180,7 +184,7 @@ function adminDashboard() {
 }
 
 function monitorRoute(pathname) {
-  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check|subscribers|notify-test))?$/);
+  const match = pathname.match(/^\/api\/monitors\/([^/]+)(?:\/(test|check|subscribers|notify-test|quota-sharing))?$/);
   return match ? { id: decodeURIComponent(match[1]), action: match[2] || null } : null;
 }
 
@@ -345,6 +349,9 @@ async function apiRoute(request, response, url) {
   }
   if (route && request.method === "POST" && route.action === "check") {
     return sendData(response, await schedulers.runNow(route.id, "manual"));
+  }
+  if (route && request.method === "POST" && route.action === "quota-sharing") {
+    return sendData(response, await schedulers.runQuotaNow(route.id));
   }
   if (route && request.method === "POST" && route.action === "notify-test") {
     const body = await readJson(request);
