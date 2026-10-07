@@ -403,7 +403,18 @@ export class MonitorEngine {
     }
   }
 
-  async runAction(config, event, action, label, request) {
+  skipAction(event, action, label, reason) {
+    action.status = "skipped";
+    action.skipReason = reason;
+    action.completedAt = new Date().toISOString();
+    delete action.error;
+    this.database.updateEvent(event);
+    this.audit("info", "action.skipped", label, { eventId: event.id, reason });
+    this.emit("event", event);
+    return true;
+  }
+
+  async runAction(config, event, action, label, request, { skipMissingAccount = false } = {}) {
     if (["success", "preview", "skipped"].includes(action.status)) return true;
     action.status = "in_progress";
     action.lastAttemptAt = new Date().toISOString();
@@ -418,6 +429,9 @@ export class MonitorEngine {
       this.emit("event", event);
       return true;
     } catch (error) {
+      if (skipMissingAccount && error.status === 404 && /^account not found[.!]?$/i.test(String(error.apiMessage).trim())) {
+        return this.skipAction(event, action, label, "Target account no longer exists in Sub2API");
+      }
       action.status = "failed";
       action.error = errorMessage(error);
       this.database.updateEvent(event);
@@ -458,8 +472,13 @@ export class MonitorEngine {
     if (!sourceRecovered) return;
 
     for (const [id, action] of Object.entries(event.actions.targetAccounts)) {
+      if (!["success", "preview", "skipped"].includes(action.status) &&
+          !config.targetAccountIds.some((targetId) => String(targetId) === id)) {
+        this.skipAction(event, action, `Reset target account ${id}`, "Target account removed from monitor configuration");
+        continue;
+      }
       await this.runAction(config, event, action, `Reset target account ${id}`, () =>
-        client.resetTargetAccount(id));
+        client.resetTargetAccount(id), { skipMissingAccount: true });
     }
 
     if (!(await this.prepareSubscriptionActions(client, event))) return;

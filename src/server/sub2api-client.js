@@ -36,9 +36,12 @@ export class Sub2ApiClient {
         throw new Error(`${method} ${apiPath} returned non-JSON HTTP ${response.status}`);
       }
       if (!response.ok) {
-        throw new Error(
+        const error = new Error(
           `${method} ${apiPath} failed with HTTP ${response.status}: ${envelope.message || responseText}`,
         );
+        error.status = response.status;
+        error.apiMessage = envelope.message || "";
+        throw error;
       }
       if (Object.hasOwn(envelope, "code") && Number(envelope.code) !== 0) {
         throw new Error(`${method} ${apiPath} failed: ${envelope.message || envelope.code}`);
