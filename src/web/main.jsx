@@ -11,7 +11,7 @@ const resolvedTheme = theme === "system"
   : theme;
 document.documentElement.dataset.theme = resolvedTheme;
 document.documentElement.style.colorScheme = resolvedTheme;
-document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolvedTheme === "dark" ? "#0c0c0e" : "#f7f7f8");
+document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolvedTheme === "dark" ? "#121110" : "#f6f4ef");
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
