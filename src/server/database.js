@@ -12,7 +12,7 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   pollIntervalSeconds: 300,
   pendingConfirmIntervalSeconds: 60,
   requestTimeoutSeconds: 45,
-  confirmationsRequired: 2,
+  confirmationsRequired: 1,
   resetGraceSeconds: 60,
   resetMaxUsedPercent: 20,
   usageAlertPercent: 80,
