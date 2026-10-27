@@ -92,3 +92,16 @@ export function resetsWithin(events, monitorId, now, days = 7) {
   const since = now - days * 86400000;
   return events.filter((event) => event.monitorId === monitorId && event.status === "complete" && !event.dryRun && (toDate(event.confirmedAt)?.getTime() || 0) >= since).length;
 }
+
+/** Stable per-account colour slot (0–5) so an account looks the same on every page. */
+export function accountSlot(id) {
+  const text = String(id ?? "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  return hash % 6;
+}
+
+export function accountInitial(name) {
+  const text = String(name || "").trim();
+  return text ? Array.from(text)[0].toUpperCase() : "?";
+}

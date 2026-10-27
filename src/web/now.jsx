@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { api } from "./api.js";
 import { countdownParts, dayLabel, shortDay, friendlyTime, money, percent, relative, windowLabel, clock, toDate } from "./format.js";
-import { accountState, describeEvent, overallSentence, primarySnapshot, resetsWithin } from "./status.js";
+import { accountInitial, accountSlot, accountState, describeEvent, overallSentence, primarySnapshot, resetsWithin } from "./status.js";
 import { Dot, Empty, Sheet, Skeleton, Spinner } from "./ui.jsx";
 
 export function useTicker(interval = 1000) {
@@ -16,15 +16,15 @@ const pad = (value) => String(value).padStart(2, "0");
 function Countdown({ resetAt, muted }) {
   const now = useTicker(1000);
   const parts = countdownParts(resetAt, now);
-  if (!parts) return <div className="countdown is-empty" aria-label="尚未读取到重置时间"><span className="num">—</span></div>;
-  if (parts.total === 0) return <div className="countdown"><span className="num small">即将重置</span></div>;
+  if (!parts) return <span className="countdown is-empty" aria-label="尚未读取到重置时间">—</span>;
+  if (parts.total === 0) return <span className="countdown">即将重置</span>;
   const label = `${parts.days ? `${parts.days} 天 ` : ""}${parts.hours} 小时 ${parts.minutes} 分后重置`;
-  return <div className={`countdown${muted ? " is-muted" : ""}`} role="timer" aria-label={label}>
-    {parts.days > 0 && <><span className="num">{parts.days}</span><span className="unit">天</span></>}
-    <span className="num">{parts.days ? pad(parts.hours) : parts.hours}</span><span className="unit">小时</span>
-    <span className="num">{pad(parts.minutes)}</span><span className="unit">分</span>
-    <span className="sec" aria-hidden="true">{pad(parts.seconds)}</span>
-  </div>;
+  return <span className={`countdown${muted ? " is-muted" : ""}`} role="timer" aria-label={label}>
+    {parts.days > 0 && <><b>{parts.days}</b><i>天</i></>}
+    <b>{parts.days ? pad(parts.hours) : parts.hours}</b><i>时</i>
+    <b>{pad(parts.minutes)}</b><i>分</i>
+    {!parts.days && <><b className="sec">{pad(parts.seconds)}</b><i>秒</i></>}
+  </span>;
 }
 
 function UsageTick({ value }) {
@@ -33,32 +33,55 @@ function UsageTick({ value }) {
   return <span className={`tick tick-${tone}`} aria-hidden="true"><span style={{ width: `${width}%` }} /></span>;
 }
 
+export function AccountMark({ monitor, size = "md" }) {
+  return <span className={`mark mark-${size} slot-${accountSlot(monitor?.id ?? monitor?.name)}`} aria-hidden="true">{accountInitial(monitor?.name)}</span>;
+}
+
+function Stat({ label, children, sub, tone }) {
+  return <div className={`stat${tone ? ` stat-${tone}` : ""}`}><dt>{label}</dt><dd>{children}{sub && <small>{sub}</small>}</dd></div>;
+}
+
 function Account({ monitor, events, adminMonitor, now, onOpen, index }) {
   const state = accountState(monitor, events, now, adminMonitor);
   const { primary, windows } = primarySnapshot(monitor);
   const recent = resetsWithin(events, monitor.id, now);
+  const runtime = monitor.runtime || {};
+  const used = primary ? Number(primary.usedPercent) : null;
+  const usedTone = used >= 90 ? "bad" : used >= 75 ? "warn" : null;
+  const conc = monitor.concurrency;
+  const concFull = conc && Number(conc.max) > 0 && Number(conc.current) >= Number(conc.max);
+  const nextAt = runtime.nextPollAt ? toDate(runtime.nextPollAt)?.getTime() : null;
+  const checked = runtime.running ? "正在检查" : `${relative(runtime.lastPollAt, now)}检查`;
+  const next = nextAt ? (nextAt <= now ? "马上再查" : `下次 ${clock(runtime.nextPollAt)}`) : null;
+  const windowName = primary ? windowLabel(primary.selector) : windows[0] ? windowLabel(windows[0]) : null;
   return <article className={`account state-${state.kind}`} style={{ "--i": index }}>
-    <header className="account-head">
-      <button type="button" className="account-name" onClick={onOpen}>
-        <span>{monitor.name}</span><ChevronRight size={16} aria-hidden="true" />
-      </button>
-      {monitor.dryRun && <span className="flag">预览模式</span>}
-    </header>
+    <button type="button" className="account-head" onClick={onOpen} aria-label={`${monitor.name} 详情`}>
+      <AccountMark monitor={monitor} />
+      <span className="account-id">
+        <span className="account-name">{monitor.name}</span>
+        <span className="account-sub">源账号 #{monitor.sourceAccountId || "--"}{windowName ? ` · ${windowName}窗口` : ""}{monitor.dryRun ? " · 预览模式" : ""}</span>
+      </span>
+      <ChevronRight className="account-chevron" size={18} aria-hidden="true" />
+    </button>
 
-    <Countdown resetAt={primary?.resetAt} muted={["pending", "resetting"].includes(state.kind)} />
-    <p className="when">{primary ? `${friendlyTime(primary.resetAt, now)} 重置${windows.length > 1 ? ` · ${windowLabel(primary.selector)}窗口` : ""}` : "尚未读取到额度"}</p>
-
-    <div className={`status status-${state.tone}`} role="status">
-      <p className="status-title"><Dot tone={state.tone} pulse={["pending", "resetting"].includes(state.kind)} />{state.title}</p>
-      {state.hint && <p className="status-hint">{state.hint}</p>}
-      {state.detail && <p className="status-detail">{state.detail}</p>}
+    <div className="reset-line">
+      <span className="reset-label">距重置</span>
+      <Countdown resetAt={primary?.resetAt} muted={["pending", "resetting", "error", "paused"].includes(state.kind)} />
+      <span className="when">{primary ? `${friendlyTime(primary.resetAt, now)}` : "尚未读取到额度"}</span>
     </div>
 
-    <p className="meta">
-      {primary && <span className="meta-item">已用 {percent(primary.usedPercent)}<UsageTick value={primary.usedPercent} /></span>}
-      <span className="meta-item">{monitor.runtime?.running ? "正在检查" : `${relative(monitor.runtime?.lastPollAt, now)}检查`}</span>
-      {recent > 0 && <span className="meta-item">近 7 天重置 {recent} 次</span>}
-    </p>
+    <dl className="stats">
+      <Stat label="已用" tone={usedTone}>{primary ? percent(primary.usedPercent) : "--"}{primary && <UsageTick value={primary.usedPercent} />}</Stat>
+      <Stat label="并发" tone={concFull ? "warn" : null}>{conc ? <>{conc.current}<span className="of"> / {conc.max}</span></> : "--"}</Stat>
+      <Stat label="近 7 天">{recent}<span className="of"> 次重置</span></Stat>
+    </dl>
+
+    <div className={`status status-${state.tone}`} role="status">
+      <p className="status-title"><Dot tone={state.tone} pulse={["pending", "resetting"].includes(state.kind)} /><span>{state.title}</span>{state.kind === "normal" && <span className="status-check">{checked}{next ? ` · ${next}` : ""}</span>}</p>
+      {state.hint && <p className="status-hint">{state.hint}</p>}
+      {state.kind !== "normal" && <p className="status-hint check-line">{checked}{next ? ` · ${next}` : ""}</p>}
+      {state.detail && <p className="status-detail">{state.detail}</p>}
+    </div>
   </article>;
 }
 
@@ -67,7 +90,7 @@ export function EventLine({ event, onOpen, now, showDay = false }) {
   return <li>
     <button type="button" className="event-line" onClick={() => onOpen(event)}>
       <time dateTime={event.confirmedAt} className={showDay ? "with-day" : undefined}>{showDay ? `${shortDay(event.confirmedAt, now)} ` : ""}{clock(event.confirmedAt)}</time>
-      <span className="event-name">{event.monitorName || "监控任务"}</span>
+      <span className="event-name"><i className={`acct-dot slot-${accountSlot(event.monitorId ?? event.monitorName)}`} aria-hidden="true" />{event.monitorName || "监控任务"}</span>
       <span className={`event-what tone-${description.tone}`}>
         {description.tone !== "ok" && <Dot tone={description.tone} />}{description.text}
       </span>

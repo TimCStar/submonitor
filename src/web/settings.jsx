@@ -4,7 +4,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 import { friendlyTime, relative, seconds as formatSeconds } from "./format.js";
 import { accountState } from "./status.js";
-import { QuotaEstimate, SubscriberList } from "./now.jsx";
+import { AccountMark, QuotaEstimate, SubscriberList } from "./now.jsx";
 import { Button, Dot, Empty, Row, SecretInput, Segmented, Skeleton, Stepper, TextInput, Toggle } from "./ui.jsx";
 
 function numberList(value) {
@@ -304,7 +304,7 @@ export function SettingsView({ adminData, publicMonitors = [], events, now, relo
   return <div className="view view-settings">
     <header className="view-head">
       <p className="eyebrow">设置</p>
-      <h1 className="headline">{monitor ? monitor.name : "添加一个账号"}</h1>
+      <h1 className="headline headline-account">{monitor && <AccountMark monitor={monitor} />}{monitor ? monitor.name : "添加一个账号"}</h1>
       <div className="account-picker">
         {monitors.length > 1 && <Segmented label="选择账号" value={monitor?.id} onChange={setSelectedId} options={monitors.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? "" : "（已暂停）"}` }))} size="sm" />}
         <button type="button" className="link" onClick={create}><Plus size={14} />添加账号</button>
