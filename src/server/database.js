@@ -10,6 +10,7 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   targetAccountIds: [],
   monitorWindows: ["7d"],
   pollIntervalSeconds: 300,
+  pendingConfirmIntervalSeconds: 60,
   requestTimeoutSeconds: 45,
   confirmationsRequired: 2,
   resetGraceSeconds: 60,

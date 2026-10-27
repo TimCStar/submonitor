@@ -45,6 +45,7 @@ test("credentials stay encrypted and identity changes cancel pending events", (t
   const publicConfig = store.getPublic(created.id);
   assert.equal(publicConfig.authSecretConfigured, true);
   assert.equal(publicConfig.publicSubscriberPreviewEnabled, true);
+  assert.equal(publicConfig.pendingConfirmIntervalSeconds, 60);
   assert.equal(Object.hasOwn(publicConfig, "authSecret"), false);
   assert.equal(Object.hasOwn(publicConfig, "authSecretCipher"), false);
   assert.notEqual(database.getMonitor(created.id).authSecretCipher, "administrator-secret");

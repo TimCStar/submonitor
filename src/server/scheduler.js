@@ -48,7 +48,7 @@ export class MonitorScheduler {
       return;
     }
     let interval = hasPending
-      ? Math.min(config.pollIntervalSeconds, 300)
+      ? Math.min(config.pollIntervalSeconds, config.pendingConfirmIntervalSeconds || 60)
       : config.pollIntervalSeconds;
     if (config.quotaSharingAutoRecalculateEnabled && config.quotaSharingEnabled) {
       interval = Math.min(interval, config.quotaSharingIntervalSeconds);

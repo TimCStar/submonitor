@@ -131,6 +131,12 @@ export class ConfigStore {
       targetAccountIds,
       monitorWindows: choices(input.monitorWindows || ["7d"], "monitorWindows", MONITOR_WINDOWS),
       pollIntervalSeconds: positiveInteger(input.pollIntervalSeconds, "pollIntervalSeconds", 15, 86400),
+      pendingConfirmIntervalSeconds: positiveInteger(
+        input.pendingConfirmIntervalSeconds ?? current.pendingConfirmIntervalSeconds ?? 60,
+        "pendingConfirmIntervalSeconds",
+        15,
+        3600,
+      ),
       requestTimeoutSeconds: positiveInteger(input.requestTimeoutSeconds, "requestTimeoutSeconds", 5, 300),
       confirmationsRequired: positiveInteger(input.confirmationsRequired, "confirmationsRequired", 1, 10),
       resetGraceSeconds: positiveInteger(input.resetGraceSeconds, "resetGraceSeconds", 1, 3600),

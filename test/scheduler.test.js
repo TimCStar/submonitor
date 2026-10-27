@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MonitorScheduler } from "../src/server/scheduler.js";
 
-function schedulerWith(pollResult) {
-  const configStore = { getPublic: () => ({ enabled: true, pollIntervalSeconds: 900 }) };
+function schedulerWith(pollResult, config = {}) {
+  const configStore = { getPublic: () => ({ enabled: true, pollIntervalSeconds: 900, pendingConfirmIntervalSeconds: 60, ...config }) };
   const engine = {
     async pollOnce() {
       return {
@@ -20,11 +20,19 @@ function nextDelaySeconds(scheduler) {
   return (Date.parse(scheduler.snapshot().nextPollAt) - Date.now()) / 1000;
 }
 
-test("a pending reset candidate shortens the next poll to 300 seconds", async () => {
+test("a pending reset candidate shortens the next poll to pendingConfirmIntervalSeconds", async () => {
   const scheduler = schedulerWith({ hasPendingCandidate: true });
   await scheduler.runNow("schedule");
   const delay = nextDelaySeconds(scheduler);
-  assert.ok(delay >= 295 && delay <= 305, `expected ~300s, got ${delay}s`);
+  assert.ok(delay >= 55 && delay <= 65, `expected ~60s, got ${delay}s`);
+  scheduler.stop();
+});
+
+test("pending confirmation respects a custom pendingConfirmIntervalSeconds", async () => {
+  const scheduler = schedulerWith({ hasPendingCandidate: true }, { pendingConfirmIntervalSeconds: 45 });
+  await scheduler.runNow("schedule");
+  const delay = nextDelaySeconds(scheduler);
+  assert.ok(delay >= 40 && delay <= 50, `expected ~45s, got ${delay}s`);
   scheduler.stop();
 });
 

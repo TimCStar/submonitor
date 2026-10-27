@@ -10,6 +10,26 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+const ACTION_CONCURRENCY = 8;
+
+export async function mapWithConcurrency(items, concurrency, mapper) {
+  const list = [...items];
+  if (!list.length) return [];
+  const limit = Math.max(1, Math.min(concurrency, list.length));
+  const results = new Array(list.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= list.length) return;
+      results[index] = await mapper(list[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, () => worker()));
+  return results;
+}
+
 function approximateWindowName(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
   if (Math.abs(seconds - FIVE_HOURS_SECONDS) <= 30 * 60) return "5h";
@@ -492,18 +512,36 @@ export class MonitorEngine {
       if (!["success", "preview", "skipped"].includes(action.status) &&
           !config.targetAccountIds.some((targetId) => String(targetId) === id)) {
         this.skipAction(event, action, `Reset target account ${id}`, "Target account removed from monitor configuration");
-        continue;
       }
-      await this.runAction(config, event, action, `Reset target account ${id}`, () =>
-        client.resetTargetAccount(id), { skipMissingAccount: true });
     }
+    await mapWithConcurrency(
+      Object.entries(event.actions.targetAccounts).filter(([, action]) =>
+        !["success", "preview", "skipped"].includes(action.status)),
+      ACTION_CONCURRENCY,
+      ([id, action]) => this.runAction(
+        config,
+        event,
+        action,
+        `Reset target account ${id}`,
+        () => client.resetTargetAccount(id),
+        { skipMissingAccount: true },
+      ),
+    );
 
     if (!(await this.prepareSubscriptionActions(client, event))) return;
     const resetBody = subscriptionResetBody(event);
-    for (const [id, action] of Object.entries(event.actions.subscriptions)) {
-      await this.runAction(config, event, action, `Reset subscription ${id}`, () =>
-        client.resetSubscription(id, resetBody));
-    }
+    await mapWithConcurrency(
+      Object.entries(event.actions.subscriptions).filter(([, action]) =>
+        !["success", "preview", "skipped"].includes(action.status)),
+      ACTION_CONCURRENCY,
+      ([id, action]) => this.runAction(
+        config,
+        event,
+        action,
+        `Reset subscription ${id}`,
+        () => client.resetSubscription(id, resetBody),
+      ),
+    )
 
     const actions = [
       event.actions.sourceRecovery,
