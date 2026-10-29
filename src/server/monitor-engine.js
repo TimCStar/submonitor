@@ -1,4 +1,5 @@
-import { Sub2ApiClient } from "./sub2api-client.js";
+import { createBackendClient } from "./backend-client.js";
+import { clientKeyResetPeriod } from "./cpr-client.js";
 import { createNotifier } from "./notifier.js";
 import { discoverSubscriptionGroupIds, listActiveSubscriptions } from "./subscriber-preview.js";
 import { QuotaSharingService } from "./quota-sharing.js";
@@ -111,6 +112,8 @@ function eventKey(config, selector, baseline) {
 
 function createEvent(config, selector, pending, current) {
   const now = new Date().toISOString();
+  const provider = config.provider || "sub2api";
+  const clientKeyIds = [...(config.clientKeyIds || [])];
   return {
     id: pending.eventId,
     monitorId: config.id,
@@ -124,18 +127,21 @@ function createEvent(config, selector, pending, current) {
     confirmedAt: now,
     dryRun: config.dryRun,
     plan: {
+      provider,
       targetAccountIds: [...config.targetAccountIds],
       subscriptionGroupMode: config.subscriptionGroupMode,
       subscriptionGroupIds: [...config.subscriptionGroupIds],
       subscriptionResetWindows: [...config.subscriptionResetWindows],
+      clientKeyIds,
     },
-    subscriptionDiscoveryComplete: false,
+    subscriptionDiscoveryComplete: provider === "cpr",
     actions: {
       sourceRecovery: { status: "pending" },
       targetAccounts: Object.fromEntries(
         config.targetAccountIds.map((id) => [String(id), { status: "pending" }]),
       ),
       subscriptions: {},
+      clientKeys: Object.fromEntries(clientKeyIds.map((id) => [String(id), { status: "pending" }])),
     },
   };
 }
@@ -155,7 +161,7 @@ export class MonitorEngine {
     this.configStore = configStore;
     this.monitorId = monitorId;
     this.emit = emit;
-    this.clientFactory = clientFactory || ((config) => new Sub2ApiClient(config));
+    this.clientFactory = clientFactory || ((config) => createBackendClient(config));
     this.notifier = notifier || createNotifier();
     this.quotaSharing = new QuotaSharingService({
       database, configStore, emit,
@@ -253,6 +259,9 @@ export class MonitorEngine {
 
   async readConcurrency(client, accountId) {
     try {
+      if (typeof client.getConcurrency === "function") {
+        return await client.getConcurrency(accountId);
+      }
       const account = await client.getAccount(accountId);
       const current = Number(account?.current_concurrency);
       const max = Number(account?.concurrency);
@@ -268,6 +277,9 @@ export class MonitorEngine {
 
   async recalculateQuota() {
     const config = this.configStore.getPrivate();
+    if ((config.provider || "sub2api") === "cpr") {
+      throw new Error("CPR 不支持额度均分");
+    }
     if (!config.quotaSharingEnabled && !config.quotaSharingDisplayEnabled) {
       throw new Error("请先启用额度均分或总额度显示，并保存配置");
     }
@@ -322,9 +334,11 @@ export class MonitorEngine {
       await this.notifyReset(config, event);
       await this.executeEvent(config, client, event);
     }
-    await this.quotaSharing.refresh(config, client, {
-      force: newEvents.some((event) => event.resetSnapshot?.canonicalName === "7d"),
-    });
+    if ((config.provider || "sub2api") !== "cpr") {
+      await this.quotaSharing.refresh(config, client, {
+        force: newEvents.some((event) => event.resetSnapshot?.canonicalName === "7d"),
+      });
+    }
     this.audit("info", "quota.checked", "Codex quota check completed", {
       sourceAccountId: config.sourceAccountId,
       windows: config.monitorWindows,
@@ -490,12 +504,21 @@ export class MonitorEngine {
 
   async executeEvent(config, client, event) {
     if (["complete", "preview"].includes(event.status)) return;
+    const provider = event.plan?.provider || config.provider || "sub2api";
+    const isCpr = provider === "cpr";
+    event.actions.clientKeys ||= {};
 
     if (event.dryRun) {
-      if (!(await this.prepareSubscriptionActions(client, event))) return;
+      if (!isCpr && !(await this.prepareSubscriptionActions(client, event))) return;
+      if (isCpr) {
+        for (const id of event.plan?.clientKeyIds || []) {
+          event.actions.clientKeys[String(id)] ||= { status: "pending" };
+        }
+      }
       event.actions.sourceRecovery.status = "preview";
       for (const action of Object.values(event.actions.targetAccounts)) action.status = "preview";
       for (const action of Object.values(event.actions.subscriptions)) action.status = "preview";
+      for (const action of Object.values(event.actions.clientKeys)) action.status = "preview";
       event.status = "preview";
       event.completedAt = new Date().toISOString();
       this.database.updateEvent(event);
@@ -503,6 +526,7 @@ export class MonitorEngine {
         eventId: event.id,
         targets: Object.keys(event.actions.targetAccounts).length,
         subscriptions: Object.keys(event.actions.subscriptions).length,
+        clientKeys: Object.keys(event.actions.clientKeys).length,
       });
       this.emit("event", event);
       return;
@@ -537,25 +561,51 @@ export class MonitorEngine {
       ),
     );
 
-    if (!(await this.prepareSubscriptionActions(client, event))) return;
-    const resetBody = subscriptionResetBody(event);
-    await mapWithConcurrency(
-      Object.entries(event.actions.subscriptions).filter(([, action]) =>
-        !["success", "preview", "skipped"].includes(action.status)),
-      ACTION_CONCURRENCY,
-      ([id, action]) => this.runAction(
-        config,
-        event,
-        action,
-        `Reset subscription ${id}`,
-        () => client.resetSubscription(id, resetBody),
-      ),
-    )
+    if (isCpr) {
+      for (const id of event.plan?.clientKeyIds || []) {
+        event.actions.clientKeys[String(id)] ||= { status: "pending" };
+      }
+      for (const [id, action] of Object.entries(event.actions.clientKeys)) {
+        if (!["success", "preview", "skipped"].includes(action.status) &&
+            !(event.plan?.clientKeyIds || []).some((keyId) => String(keyId) === id)) {
+          this.skipAction(event, action, `Reset client key ${id}`, "Client key removed from monitor configuration");
+        }
+      }
+      const period = clientKeyResetPeriod(event.plan?.subscriptionResetWindows || config.subscriptionResetWindows);
+      await mapWithConcurrency(
+        Object.entries(event.actions.clientKeys).filter(([, action]) =>
+          !["success", "preview", "skipped"].includes(action.status)),
+        ACTION_CONCURRENCY,
+        ([id, action]) => this.runAction(
+          config,
+          event,
+          action,
+          `Reset client key budget ${id} (${period})`,
+          () => client.resetClientKeyBudget(id, period),
+        ),
+      );
+    } else {
+      if (!(await this.prepareSubscriptionActions(client, event))) return;
+      const resetBody = subscriptionResetBody(event);
+      await mapWithConcurrency(
+        Object.entries(event.actions.subscriptions).filter(([, action]) =>
+          !["success", "preview", "skipped"].includes(action.status)),
+        ACTION_CONCURRENCY,
+        ([id, action]) => this.runAction(
+          config,
+          event,
+          action,
+          `Reset subscription ${id}`,
+          () => client.resetSubscription(id, resetBody),
+        ),
+      );
+    }
 
     const actions = [
       event.actions.sourceRecovery,
       ...Object.values(event.actions.targetAccounts),
       ...Object.values(event.actions.subscriptions),
+      ...Object.values(event.actions.clientKeys),
     ];
     if (actions.every((action) => ["success", "skipped"].includes(action.status))) {
       event.status = "complete";
@@ -565,6 +615,7 @@ export class MonitorEngine {
         eventId: event.id,
         targets: Object.keys(event.actions.targetAccounts).length,
         subscriptions: Object.keys(event.actions.subscriptions).length,
+        clientKeys: Object.keys(event.actions.clientKeys).length,
       });
       this.emit("event", event);
     }

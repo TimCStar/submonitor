@@ -99,6 +99,14 @@ export class Sub2ApiClient {
     return this.request("GET", `/api/v1/admin/subscriptions?${query}`);
   }
 
+  async getConcurrency(accountId) {
+    const account = await this.getAccount(accountId);
+    const current = Number(account?.current_concurrency);
+    const max = Number(account?.concurrency);
+    if (!Number.isFinite(current) || !Number.isFinite(max)) return null;
+    return { current, max, updatedAt: new Date().toISOString() };
+  }
+
   recoverSourceAccount(accountId) {
     return this.request("POST", `/api/v1/admin/accounts/${accountId}/recover-state`);
   }

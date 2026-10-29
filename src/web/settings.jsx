@@ -14,6 +14,17 @@ function numberList(value) {
   return [...new Set(parsed)];
 }
 
+function idList(value, { integer = true } = {}) {
+  if (!String(value || "").trim()) return [];
+  const parts = String(value).split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean);
+  if (integer) {
+    const parsed = parts.map((item) => Number(item));
+    if (parsed.some((item) => !Number.isSafeInteger(item) || item <= 0)) throw new Error("账号和分组 ID 必须是用逗号分隔的正整数");
+    return [...new Set(parsed)];
+  }
+  return [...new Set(parts)];
+}
+
 const TRANSIENT = ["runtime", "snapshots", "quotaSharing", "updatedAt", "createdAt", "concurrency", "candidates"];
 function editable(form) {
   const copy = { ...form };
@@ -24,12 +35,16 @@ function editable(form) {
 function initialForm(monitor) {
   return {
     ...monitor,
+    provider: monitor.provider || "sub2api",
     authSecret: "", telegramBotToken: "", barkKey: "", emailSmtpPass: "",
     targetAccountIdsText: (monitor.targetAccountIds || []).join(", "),
+    clientKeyIdsText: (monitor.clientKeyIds || []).join(", "),
     subscriptionGroupIdsText: (monitor.subscriptionGroupIds || []).join(", "),
     quotaSharingMode: monitor.quotaSharingMode || "equal",
     quotaSharingWeightsText: Object.entries(monitor.quotaSharingWeights || {}).map(([userId, weight]) => `${userId}:${weight}`).join(", "),
     pendingConfirmIntervalSeconds: monitor.pendingConfirmIntervalSeconds ?? 60,
+    templateId: "",
+    useSavedSecret: false,
   };
 }
 
@@ -116,8 +131,20 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
   async function save(event) {
     event?.preventDefault();
     let payload;
-    try { payload = { ...form, targetAccountIds: numberList(form.targetAccountIdsText), subscriptionGroupIds: numberList(form.subscriptionGroupIdsText), quotaSharingWeights: form.quotaSharingWeightsText }; }
-    catch (error) { notify("error", error.message); return; }
+    try {
+      const isCpr = (form.provider || "sub2api") === "cpr";
+      payload = {
+        ...form,
+        targetAccountIds: idList(form.targetAccountIdsText, { integer: !isCpr }),
+        clientKeyIds: isCpr ? idList(form.clientKeyIdsText, { integer: false }) : [],
+        subscriptionGroupIds: isCpr ? [] : numberList(form.subscriptionGroupIdsText),
+        quotaSharingWeights: form.quotaSharingWeightsText,
+      };
+      if (form.useSavedSecret && form.templateId) {
+        payload.useSavedSecret = true;
+        payload.templateId = form.templateId;
+      }
+    } catch (error) { notify("error", error.message); return; }
     const result = await run("save", () => api.saveMonitor(monitor.id, payload), "已保存");
     if (result) await reload();
   }
@@ -138,7 +165,7 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
       </div>
     </Group>
 
-    <Group id="speed" title="检测速度" hint="越快越早发现重置，但会多请求一次 Sub2API。">
+    <Group id="speed" title="检测速度" hint="越快越早发现重置，但会多请求一次后端。">
       <Row label="平时" hint="没有异常时多久查一次额度。" stack>
         <PresetPicker label="平时检查间隔" id="poll" value={form.pollIntervalSeconds} onChange={(value) => update("pollIntervalSeconds", value)} presets={[60, 300, 600, 1800]} min={15} max={86400} />
       </Row>
@@ -188,47 +215,62 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
       </div>
     </Group>
 
-    <Group id="conn" title="Sub2API 连接" hint="这个账号从哪里读额度，重置后恢复哪些账号。">
+    <Group id="conn" title="后端连接" hint="从 Sub2API 或 CPR 读取 Codex 额度，并在自然重置后恢复账号。">
       <Row label="名称" htmlFor="name" stack><TextInput id="name" value={form.name || ""} maxLength={80} onChange={(event) => update("name", event.target.value)} /></Row>
-      <Row label="服务地址" htmlFor="base" stack><TextInput id="base" type="url" inputMode="url" value={form.baseUrl || ""} onChange={(event) => update("baseUrl", event.target.value)} placeholder="https://sub2api.example.com" /></Row>
+      <Row label="后端类型" stack><Segmented label="后端类型" value={form.provider || "sub2api"} onChange={(value) => patch({ provider: value, ...(value === "cpr" ? { subscriptionGroupMode: "none", quotaSharingEnabled: false, quotaSharingDisplayEnabled: false } : {}) })} options={[{ value: "sub2api", label: "Sub2API" }, { value: "cpr", label: "CPR" }]} /></Row>
+      <ConnectionTemplates form={form} patch={patch} update={update} notify={notify} busy={busy} setBusy={setBusy} />
+      <Row label="服务地址" htmlFor="base" stack><TextInput id="base" type="url" inputMode="url" value={form.baseUrl || ""} onChange={(event) => update("baseUrl", event.target.value)} placeholder={(form.provider || "sub2api") === "cpr" ? "https://cpr.example.com" : "https://sub2api.example.com"} /></Row>
       <Row label="认证方式" stack><Segmented label="认证方式" value={form.authType} onChange={(value) => update("authType", value)} options={[{ value: "apiKey", label: "API Key" }, { value: "jwt", label: "管理员 JWT" }]} /></Row>
-      <Row label="管理凭据" hint="加密保存，不会显示。" htmlFor="secret" stack><SecretInput id="secret" configured={monitor.authSecretConfigured} invalid={monitor.authSecretInvalid} value={form.authSecret} onChange={(event) => update("authSecret", event.target.value)} placeholder={monitor.authSecretConfigured ? undefined : "输入 API Key 或 JWT"} /></Row>
+      <Row label="管理凭据" hint={form.useSavedSecret ? "将使用连接模板中已保存的凭据。" : "加密保存，不会显示。"} htmlFor="secret" stack>
+        <SecretInput id="secret" configured={monitor.authSecretConfigured || form.useSavedSecret} invalid={monitor.authSecretInvalid && !form.useSavedSecret} value={form.authSecret} onChange={(event) => patch({ authSecret: event.target.value, useSavedSecret: false, templateId: "" })} placeholder={monitor.authSecretConfigured || form.useSavedSecret ? undefined : "输入 API Key 或 JWT"} />
+      </Row>
       <div className="field-pair">
-        <Row label="源账号 ID" hint="被监控的 Codex 账号。" htmlFor="src" stack><TextInput id="src" type="number" inputMode="numeric" min="1" value={form.sourceAccountId || ""} onChange={(event) => update("sourceAccountId", event.target.value)} /></Row>
-        <Row label="一起恢复的账号" hint="逗号分隔，可留空。" htmlFor="targets" stack><TextInput id="targets" inputMode="numeric" value={form.targetAccountIdsText} onChange={(event) => update("targetAccountIdsText", event.target.value)} placeholder="34, 35" /></Row>
+        <Row label="源账号 ID" hint={(form.provider || "sub2api") === "cpr" ? "CPR 账号字符串 ID。" : "被监控的 Codex 账号。"} htmlFor="src" stack>
+          <TextInput id="src" type={(form.provider || "sub2api") === "cpr" ? "text" : "number"} inputMode={(form.provider || "sub2api") === "cpr" ? "text" : "numeric"} min={(form.provider || "sub2api") === "cpr" ? undefined : "1"} value={form.sourceAccountId || ""} onChange={(event) => update("sourceAccountId", event.target.value)} />
+        </Row>
+        <Row label="一起恢复的账号" hint="逗号分隔，可留空。" htmlFor="targets" stack>
+          <TextInput id="targets" inputMode={(form.provider || "sub2api") === "cpr" ? "text" : "numeric"} value={form.targetAccountIdsText} onChange={(event) => update("targetAccountIdsText", event.target.value)} placeholder={(form.provider || "sub2api") === "cpr" ? "acc_…, acc_…" : "34, 35"} />
+        </Row>
       </div>
     </Group>
 
-    <Group id="subs" title="订阅与额度" hint="重置后顺带重置订阅用户的用量，可选按人均分周额度。">
-      <Row label="订阅分组" stack><Segmented label="订阅分组来源" value={form.subscriptionGroupMode} onChange={(value) => update("subscriptionGroupMode", value)} options={[{ value: "none", label: "不联动" }, { value: "auto", label: "自动发现" }, { value: "explicit", label: "指定分组" }]} /></Row>
-      {form.subscriptionGroupMode === "explicit" && <Row label="分组 ID" hint="逗号分隔。" htmlFor="groups" stack><TextInput id="groups" value={form.subscriptionGroupIdsText} onChange={(event) => update("subscriptionGroupIdsText", event.target.value)} placeholder="10, 11" /></Row>}
-      {form.subscriptionGroupMode !== "none" && <>
-        <Row label="重置哪些用量" stack><Segmented multiple label="订阅重置周期" value={form.subscriptionResetWindows || []} onChange={(value) => update("subscriptionResetWindows", value)} options={[{ value: "daily", label: "日" }, { value: "weekly", label: "周" }, { value: "monthly", label: "月" }]} /></Row>
-        <Toggle checked={form.publicSubscriberPreviewEnabled !== false} onChange={(value) => update("publicSubscriberPreviewEnabled", value)} label="公开页显示订阅用户" hint="脱敏后显示在账号详情里。" />
-        <AdminSubscribers monitor={monitor} />
-      </>}
-      <Toggle checked={form.quotaSharingEnabled} onChange={(value) => update("quotaSharingEnabled", value)} label="按人均分周额度" hint="给专用订阅分组统一设置每人周上限。" />
-      {form.quotaSharingEnabled && <div className="nested">
-        <Row label="专用分组 ID" htmlFor="qs-group"><TextInput id="qs-group" className="input input-short" type="number" inputMode="numeric" min="1" value={form.quotaSharingGroupId || ""} onChange={(event) => update("quotaSharingGroupId", event.target.value)} /></Row>
-        <Row label="分配方式" stack><Segmented label="分配方式" value={form.quotaSharingMode || "equal"} onChange={(value) => update("quotaSharingMode", value)} options={[{ value: "equal", label: "平均分配" }, { value: "proportional", label: "按比例分配" }]} /></Row>
-        {form.quotaSharingMode === "proportional" && <Row label="用户权重" hint="格式 用户ID:权重，逗号分隔；未列出的用户权重为 1。Sub2API 只有分组级周上限，按比例分配仅计算预览，不会写入。" htmlFor="qs-weights" stack><TextInput id="qs-weights" value={form.quotaSharingWeightsText || ""} onChange={(event) => update("quotaSharingWeightsText", event.target.value)} placeholder="12:2, 15:0.5" /></Row>}
-        <Toggle checked={form.quotaSharingReserveEnabled} onChange={(value) => update("quotaSharingReserveEnabled", value)} label="预留一部分额度" />
-        {form.quotaSharingReserveEnabled && <Row label="预留比例" htmlFor="qs-reserve"><span className="inline-input"><TextInput id="qs-reserve" type="number" inputMode="decimal" min="0" max="90" step="0.1" value={form.quotaSharingReservePercent ?? ""} onChange={(event) => update("quotaSharingReservePercent", event.target.value)} /><span>%</span></span></Row>}
-        <Toggle checked={form.quotaSharingAutoRecalculateEnabled} onChange={(value) => update("quotaSharingAutoRecalculateEnabled", value)} label="定时重算并同步" hint="关闭时只估算，可手动同步。" />
-        {form.quotaSharingAutoRecalculateEnabled && <Row label="重算间隔" stack><PresetPicker label="重算间隔" id="qs-interval" value={form.quotaSharingIntervalSeconds} onChange={(value) => update("quotaSharingIntervalSeconds", value)} presets={[300, 900, 3600]} min={60} max={86400} /></Row>}
-      </div>}
-      <Toggle checked={form.quotaSharingDisplayEnabled} onChange={(value) => update("quotaSharingDisplayEnabled", value)} label="公开页显示额度估算" />
-      {(monitor.quotaSharingEnabled || monitor.quotaSharingDisplayEnabled) && <div className="subpanel">
-        <QuotaEstimate quota={monitor.quotaSharing} now={now} showError />
-        <Button onClick={async () => { const result = await run("quota", () => api.recalculateQuota(monitor.id)); if (result) { await reload(); notify(result.quotaSharing?.status === "blocked" ? "error" : "success", result.quotaSharing?.note || "额度重算完成"); } }} busy={busy === "quota"} disabled={Boolean(busy) || !credentialsReady}>
-          {monitor.quotaSharingEnabled && !monitor.dryRun && monitor.quotaSharingMode !== "proportional" ? "立即重算并同步" : "刷新估算"}
-        </Button>
-      </div>}
-    </Group>
+    {(form.provider || "sub2api") === "cpr" ? (
+      <Group id="subs" title="Client Key 预算" hint="自然重置确认后，清零选定 Client Key 的日／周已用金额。CPR 不支持订阅分组与额度均分。">
+        <Row label="Client Key ID" hint="逗号分隔，可留空。" htmlFor="ckeys" stack><TextInput id="ckeys" value={form.clientKeyIdsText || ""} onChange={(event) => update("clientKeyIdsText", event.target.value)} placeholder="ck_…" /></Row>
+        <Row label="清零哪些周期" stack><Segmented multiple label="Client Key 预算周期" value={form.subscriptionResetWindows || []} onChange={(value) => update("subscriptionResetWindows", value)} options={[{ value: "daily", label: "日" }, { value: "weekly", label: "周" }, { value: "monthly", label: "全部（含月）" }]} /></Row>
+      </Group>
+    ) : (
+      <Group id="subs" title="订阅与额度" hint="重置后顺带重置订阅用户的用量，可选按人均分周额度。">
+        <Row label="订阅分组" stack><Segmented label="订阅分组来源" value={form.subscriptionGroupMode} onChange={(value) => update("subscriptionGroupMode", value)} options={[{ value: "none", label: "不联动" }, { value: "auto", label: "自动发现" }, { value: "explicit", label: "指定分组" }]} /></Row>
+        {form.subscriptionGroupMode === "explicit" && <Row label="分组 ID" hint="逗号分隔。" htmlFor="groups" stack><TextInput id="groups" value={form.subscriptionGroupIdsText} onChange={(event) => update("subscriptionGroupIdsText", event.target.value)} placeholder="10, 11" /></Row>}
+        {form.subscriptionGroupMode !== "none" && <>
+          <Row label="重置哪些用量" stack><Segmented multiple label="订阅重置周期" value={form.subscriptionResetWindows || []} onChange={(value) => update("subscriptionResetWindows", value)} options={[{ value: "daily", label: "日" }, { value: "weekly", label: "周" }, { value: "monthly", label: "月" }]} /></Row>
+          <Toggle checked={form.publicSubscriberPreviewEnabled !== false} onChange={(value) => update("publicSubscriberPreviewEnabled", value)} label="公开页显示订阅用户" hint="脱敏后显示在账号详情里。" />
+          <AdminSubscribers monitor={monitor} />
+        </>}
+        <Toggle checked={form.quotaSharingEnabled} onChange={(value) => update("quotaSharingEnabled", value)} label="按人均分周额度" hint="给专用订阅分组统一设置每人周上限。" />
+        {form.quotaSharingEnabled && <div className="nested">
+          <Row label="专用分组 ID" htmlFor="qs-group"><TextInput id="qs-group" className="input input-short" type="number" inputMode="numeric" min="1" value={form.quotaSharingGroupId || ""} onChange={(event) => update("quotaSharingGroupId", event.target.value)} /></Row>
+          <Row label="分配方式" stack><Segmented label="分配方式" value={form.quotaSharingMode || "equal"} onChange={(value) => update("quotaSharingMode", value)} options={[{ value: "equal", label: "平均分配" }, { value: "proportional", label: "按比例分配" }]} /></Row>
+          {form.quotaSharingMode === "proportional" && <Row label="用户权重" hint="格式 用户ID:权重，逗号分隔；未列出的用户权重为 1。Sub2API 只有分组级周上限，按比例分配仅计算预览，不会写入。" htmlFor="qs-weights" stack><TextInput id="qs-weights" value={form.quotaSharingWeightsText || ""} onChange={(event) => update("quotaSharingWeightsText", event.target.value)} placeholder="12:2, 15:0.5" /></Row>}
+          <Toggle checked={form.quotaSharingReserveEnabled} onChange={(value) => update("quotaSharingReserveEnabled", value)} label="预留一部分额度" />
+          {form.quotaSharingReserveEnabled && <Row label="预留比例" htmlFor="qs-reserve"><span className="inline-input"><TextInput id="qs-reserve" type="number" inputMode="decimal" min="0" max="90" step="0.1" value={form.quotaSharingReservePercent ?? ""} onChange={(event) => update("quotaSharingReservePercent", event.target.value)} /><span>%</span></span></Row>}
+          <Toggle checked={form.quotaSharingAutoRecalculateEnabled} onChange={(value) => update("quotaSharingAutoRecalculateEnabled", value)} label="定时重算并同步" hint="关闭时只估算，可手动同步。" />
+          {form.quotaSharingAutoRecalculateEnabled && <Row label="重算间隔" stack><PresetPicker label="重算间隔" id="qs-interval" value={form.quotaSharingIntervalSeconds} onChange={(value) => update("quotaSharingIntervalSeconds", value)} presets={[300, 900, 3600]} min={60} max={86400} /></Row>}
+        </div>}
+        <Toggle checked={form.quotaSharingDisplayEnabled} onChange={(value) => update("quotaSharingDisplayEnabled", value)} label="公开页显示额度估算" />
+        {(monitor.quotaSharingEnabled || monitor.quotaSharingDisplayEnabled) && <div className="subpanel">
+          <QuotaEstimate quota={monitor.quotaSharing} now={now} showError />
+          <Button onClick={async () => { const result = await run("quota", () => api.recalculateQuota(monitor.id)); if (result) { await reload(); notify(result.quotaSharing?.status === "blocked" ? "error" : "success", result.quotaSharing?.note || "额度重算完成"); } }} busy={busy === "quota"} disabled={Boolean(busy) || !credentialsReady}>
+            {monitor.quotaSharingEnabled && !monitor.dryRun && monitor.quotaSharingMode !== "proportional" ? "立即重算并同步" : "刷新估算"}
+          </Button>
+        </div>}
+      </Group>
+    )}
 
     <Group id="danger" title="删除账号" hint="删除后无法恢复本地历史记录。">
       <div className="danger-zone">
-        <div><strong>删除“{monitor.name}”</strong><p>只删除 SubMonitor 里的这个监控任务和本地历史，不会改动 Sub2API 里的账号。</p></div>
+        <div><strong>删除“{monitor.name}”</strong><p>只删除 SubMonitor 里的这个监控任务和本地历史，不会改动后端里的账号。</p></div>
         <Button variant="danger" onClick={onDelete} busy={deleting} disabled={Boolean(busy) || deleting}>删除</Button>
       </div>
     </Group>
@@ -236,7 +278,7 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
     <details className="group advanced">
       <summary><h2>高级</h2><p>一般不需要改。</p></summary>
       <div className="group-body">
-        <Row label="请求超时" hint="单次请求 Sub2API 的最长等待。" htmlFor="timeout"><span className="inline-input"><TextInput id="timeout" type="number" inputMode="numeric" min="5" max="300" value={form.requestTimeoutSeconds ?? ""} onChange={(event) => update("requestTimeoutSeconds", event.target.value)} /><span>秒</span></span></Row>
+        <Row label="请求超时" hint="单次请求后端的最长等待。" htmlFor="timeout"><span className="inline-input"><TextInput id="timeout" type="number" inputMode="numeric" min="5" max="300" value={form.requestTimeoutSeconds ?? ""} onChange={(event) => update("requestTimeoutSeconds", event.target.value)} /><span>秒</span></span></Row>
         <Row label="重置时间容差" hint="重置时间前移超过这个值才算新周期。" htmlFor="grace"><span className="inline-input"><TextInput id="grace" type="number" inputMode="numeric" min="1" max="3600" value={form.resetGraceSeconds ?? ""} onChange={(event) => update("resetGraceSeconds", event.target.value)} /><span>秒</span></span></Row>
         <Row label="新周期用量上限" hint="重置后用量高于此值时不认为是重置。" htmlFor="maxused"><span className="inline-input"><TextInput id="maxused" type="number" inputMode="decimal" min="0" max="100" value={form.resetMaxUsedPercent ?? ""} onChange={(event) => update("resetMaxUsedPercent", event.target.value)} /><span>%</span></span></Row>
       </div>
@@ -251,6 +293,105 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
     </div>, document.body)}
   </form>;
 }
+
+function ConnectionTemplates({ form, patch, update, notify, busy, setBusy }) {
+  const [templates, setTemplates] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function refresh() {
+    try { setTemplates(await api.connectionTemplates()); }
+    catch (error) { notify("error", error.message); }
+  }
+  useEffect(() => { void refresh(); }, []);
+
+  async function apply(id) {
+    setBusy("template");
+    try {
+      const applied = await api.applyConnectionTemplate(id);
+      patch({
+        provider: applied.provider,
+        baseUrl: applied.baseUrl,
+        authType: applied.authType,
+        authSecret: "",
+        useSavedSecret: true,
+        templateId: applied.templateId,
+        ...(applied.provider === "cpr" ? { subscriptionGroupMode: "none", quotaSharingEnabled: false, quotaSharingDisplayEnabled: false } : {}),
+      });
+      notify("success", "已套用连接模板（凭据使用已保存的密钥）");
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveCurrent() {
+    if (!form.baseUrl) { notify("error", "请先填写服务地址"); return; }
+    if (!form.authSecret && !form.useSavedSecret) { notify("error", "请先输入管理凭据，或先套用已有模板"); return; }
+    const templateName = name.trim() || `${(form.provider || "sub2api").toUpperCase()} ${form.baseUrl.replace(/^https?:\/\//, "")}`;
+    setSaving(true);
+    try {
+      const payload = {
+        name: templateName,
+        provider: form.provider || "sub2api",
+        baseUrl: form.baseUrl,
+        authType: form.authType || "apiKey",
+        authSecret: form.authSecret,
+      };
+      if (!payload.authSecret && form.templateId) {
+        // Re-save requires a fresh secret from the form; ask the user.
+        notify("error", "保存为模板需要重新输入管理凭据");
+        return;
+      }
+      await api.createConnectionTemplate(payload);
+      setName("");
+      setOpen(false);
+      await refresh();
+      notify("success", "连接模板已保存");
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(id) {
+    if (!window.confirm("删除这个连接模板？")) return;
+    try {
+      await api.deleteConnectionTemplate(id);
+      if (form.templateId === id) patch({ templateId: "", useSavedSecret: false });
+      await refresh();
+      notify("success", "模板已删除");
+    } catch (error) {
+      notify("error", error.message);
+    }
+  }
+
+  return <div className="nested">
+    <Row label="连接模板" hint="一键填入后端地址与认证方式；凭据使用模板中已保存的密钥。" stack>
+      <div className="button-line" style={{ flexWrap: "wrap" }}>
+        {templates.map((template) => (
+          <Button key={template.id} onClick={() => apply(template.id)} disabled={Boolean(busy)} >
+            {template.name}
+          </Button>
+        ))}
+        <Button onClick={() => setOpen((value) => !value)} disabled={Boolean(busy)}>{open ? "取消保存" : "保存为模板"}</Button>
+      </div>
+    </Row>
+    {open && <div className="field-pair">
+      <Row label="模板名称" htmlFor="tpl-name" stack><TextInput id="tpl-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 公司 CPR" maxLength={80} /></Row>
+      <Row label=" " stack><Button onClick={saveCurrent} busy={saving} disabled={saving}>保存当前连接</Button></Row>
+    </div>}
+    {templates.length > 0 && <div className="button-line" style={{ flexWrap: "wrap" }}>
+      {templates.map((template) => (
+        <button key={`del-${template.id}`} type="button" className="link" onClick={() => remove(template.id)}>删除「{template.name}」</button>
+      ))}
+    </div>}
+  </div>;
+}
+
 
 function TwoFactor({ notify }) {
   const [security, setSecurity] = useState({ loading: true, enabled: false });

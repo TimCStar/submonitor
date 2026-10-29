@@ -1,17 +1,18 @@
 # SubMonitor
 
-SubMonitor 是面向 Sub2API 的 Codex OAuth 额度周期监控和自动恢复控制台。它只读取 Codex 上游额度，不调用任何 OpenAI 上游额度重置接口。
+SubMonitor 是面向 Sub2API / CPR 的 Codex OAuth 额度周期监控和自动恢复控制台。它只读取 Codex 上游额度，不调用任何 OpenAI 上游额度重置接口。
 
 检测到 Codex OAuth 账号自然进入新额度周期后，SubMonitor 可以自动：
 
 1. 恢复源账号的异常、限流和临时不可调度状态。
-2. 重置同一 Sub2API 实例内指定目标账号的本地额度计数。
-3. 重置关联订阅分组中有效用户订阅的日、周或月额度。
+2. 重置同一后端实例内指定目标账号的本地额度计数（Sub2API `reset-quota` / CPR `recover`）。
+3. Sub2API：重置关联订阅分组中有效用户订阅的日、周或月额度；CPR：清零选定 Client Key 的日／周预算（`reset-budget`）。
+4. 保存命名的加密连接模板，一键套用到监控任务。
 
 ## 功能
 
 - 无需登录的公开监控页；配置与审计后台单独登录
-- 支持多个独立 Codex OAuth 监控任务，每个任务拥有独立 Sub2API 凭据、源账号、目标账号和订阅规则
+- 支持多个独立 Codex OAuth 监控任务；每个任务可选 Sub2API 或 CPR 后端、独立凭据、源账号、目标账号，以及 Sub2API 订阅规则或 CPR Client Key 预算重置
 - 后台展示订阅分组中的有效用户，邮箱和用户名在服务端脱敏后再传给浏览器
 - Sub2API 风格的响应式 React 控制台和 Node.js 后台服务
 - `5h`、`7d`、`primary`、`secondary` 额度窗口

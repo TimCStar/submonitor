@@ -25,6 +25,37 @@ function ids(value, name) {
   return [...new Set(value.map((item) => positiveInteger(item, name)))];
 }
 
+function providerName(value) {
+  const provider = String(value || "sub2api").trim().toLowerCase();
+  if (provider !== "sub2api" && provider !== "cpr") {
+    throw new Error("provider must be sub2api or cpr");
+  }
+  return provider;
+}
+
+function accountId(value, name, provider) {
+  if (value === null || value === undefined || value === "") return null;
+  if (provider === "cpr") {
+    const id = String(value).trim();
+    if (!id || id.length > 128) throw new Error(`${name} must be a non-empty string up to 128 characters`);
+    return id;
+  }
+  return positiveInteger(value, name);
+}
+
+function accountIds(value, name, provider) {
+  if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
+  if (provider === "cpr") {
+    const result = [...new Set(value.map((item) => {
+      const id = String(item ?? "").trim();
+      if (!id || id.length > 128) throw new Error(`${name} entries must be non-empty strings`);
+      return id;
+    }))];
+    return result;
+  }
+  return ids(value, name);
+}
+
 function choices(value, name, allowed) {
   if (!Array.isArray(value) || value.length === 0) throw new Error(`${name} must not be empty`);
   const result = [...new Set(value.map(String))];
@@ -140,24 +171,37 @@ export class ConfigStore {
   }
 
   normalize(input, current) {
-    const sourceAccountId = input.sourceAccountId
-      ? positiveInteger(input.sourceAccountId, "sourceAccountId")
-      : null;
-    const targetAccountIds = ids(input.targetAccountIds || [], "targetAccountIds");
+    const provider = providerName(input.provider ?? current.provider ?? "sub2api");
+    const sourceAccountId = accountId(input.sourceAccountId, "sourceAccountId", provider);
+    const targetAccountIds = accountIds(input.targetAccountIds || [], "targetAccountIds", provider);
     if (sourceAccountId && targetAccountIds.includes(sourceAccountId)) {
       throw new Error("targetAccountIds must not contain sourceAccountId");
     }
-    const groupMode = ["none", "auto", "explicit"].includes(input.subscriptionGroupMode)
+    let groupMode = ["none", "auto", "explicit"].includes(input.subscriptionGroupMode)
       ? input.subscriptionGroupMode
       : "none";
     const sharingGroupId = Object.hasOwn(input, "quotaSharingGroupId") ? input.quotaSharingGroupId : current.quotaSharingGroupId;
+    const clientKeyIds = provider === "cpr"
+      ? accountIds(input.clientKeyIds || [], "clientKeyIds", "cpr")
+      : [];
+    if (provider === "cpr") {
+      if (groupMode !== "none") {
+        throw new Error("CPR 不支持订阅分组联动，请改用 Client Key 预算重置");
+      }
+      if (input.quotaSharingEnabled || input.quotaSharingDisplayEnabled) {
+        throw new Error("CPR 不支持额度均分与公开额度估算");
+      }
+      groupMode = "none";
+    }
     const next = {
       ...current,
+      provider,
       name: normalizeName(input.name ?? current.name),
       baseUrl: normalizeBaseUrl(input.baseUrl),
       authType: input.authType === "jwt" ? "jwt" : "apiKey",
       sourceAccountId,
       targetAccountIds,
+      clientKeyIds,
       monitorWindows: choices(input.monitorWindows || ["7d"], "monitorWindows", MONITOR_WINDOWS),
       pollIntervalSeconds: positiveInteger(input.pollIntervalSeconds, "pollIntervalSeconds", 15, 86400),
       pendingConfirmIntervalSeconds: positiveInteger(
@@ -180,7 +224,7 @@ export class ConfigStore {
       ),
       publicSubscriberPreviewEnabled: Boolean(input.publicSubscriberPreviewEnabled ?? current.publicSubscriberPreviewEnabled ?? true),
       quotaSharingEnabled: Boolean(input.quotaSharingEnabled ?? current.quotaSharingEnabled ?? false),
-      quotaSharingGroupId: sharingGroupId ? positiveInteger(sharingGroupId, "quotaSharingGroupId") : null,
+      quotaSharingGroupId: provider === "cpr" ? null : (sharingGroupId ? positiveInteger(sharingGroupId, "quotaSharingGroupId") : null),
       quotaSharingReserveEnabled: Boolean(input.quotaSharingReserveEnabled ?? current.quotaSharingReserveEnabled ?? false),
       quotaSharingReservePercent: numberInRange(input.quotaSharingReservePercent ?? current.quotaSharingReservePercent ?? 10, "quotaSharingReservePercent", 0, 90),
       quotaSharingAutoRecalculateEnabled: Boolean(input.quotaSharingAutoRecalculateEnabled ?? current.quotaSharingAutoRecalculateEnabled ?? false),
@@ -202,10 +246,29 @@ export class ConfigStore {
       dryRun: Boolean(input.dryRun),
       enabled: Boolean(input.enabled),
     };
+    if (provider === "cpr") {
+      next.subscriptionGroupMode = "none";
+      next.subscriptionGroupIds = [];
+      next.publicSubscriberPreviewEnabled = false;
+      next.quotaSharingEnabled = false;
+      next.quotaSharingDisplayEnabled = false;
+      next.quotaSharingGroupId = null;
+      next.quotaSharingAutoRecalculateEnabled = false;
+      next.clientKeyIds = clientKeyIds;
+    } else {
+      next.clientKeyIds = [];
+    }
     if (Object.hasOwn(input, "authSecret") && input.authSecret) {
       next.authSecretCipher = this.secretBox.encrypt(String(input.authSecret));
     }
     if (input.clearAuthSecret === true) next.authSecretCipher = "";
+    if (input.useSavedSecret === true && input.templateId) {
+      const template = this.database.getConnectionTemplate(input.templateId);
+      if (!template?.authSecretCipher) throw new Error("Connection template credential is missing");
+      next.authSecretCipher = template.authSecretCipher;
+    } else if (input.useSavedSecret === true && current.authSecretCipher) {
+      // keep current cipher
+    }
     if (Object.hasOwn(input, "telegramBotToken") && input.telegramBotToken) {
       next.telegramBotTokenCipher = this.secretBox.encrypt(String(input.telegramBotToken));
     }
@@ -284,6 +347,85 @@ export class ConfigStore {
   delete(id) {
     if (!this.database.getMonitor(id)) throw new Error("Monitor not found");
     return this.database.deleteMonitor(id);
+  }
+
+  listTemplatesPublic() {
+    return this.database.listConnectionTemplates().map((template) => ({
+      id: template.id,
+      name: template.name,
+      provider: template.provider,
+      baseUrl: template.baseUrl,
+      authType: template.authType,
+      authSecretConfigured: Boolean(template.authSecretCipher),
+      createdAt: template.createdAt,
+      updatedAt: template.updatedAt,
+    }));
+  }
+
+  createTemplate(input = {}) {
+    const id = crypto.randomUUID();
+    const provider = providerName(input.provider);
+    const name = normalizeName(input.name);
+    const baseUrl = normalizeBaseUrl(input.baseUrl);
+    if (!baseUrl) throw new Error("baseUrl is required");
+    const authType = input.authType === "jwt" ? "jwt" : "apiKey";
+    const secret = String(input.authSecret || "").trim();
+    if (!secret) throw new Error("authSecret is required when creating a connection template");
+    const authSecretCipher = this.secretBox.encrypt(secret);
+    this.secretBox.decrypt(authSecretCipher);
+    return this.toTemplatePublic(this.database.saveConnectionTemplate({
+      id, name, provider, baseUrl, authType, authSecretCipher,
+    }));
+  }
+
+  updateTemplate(id, input = {}) {
+    const current = this.database.getConnectionTemplate(id);
+    if (!current) throw new Error("Connection template not found");
+    const provider = providerName(input.provider ?? current.provider);
+    const name = normalizeName(input.name ?? current.name);
+    const baseUrl = normalizeBaseUrl(Object.hasOwn(input, "baseUrl") ? input.baseUrl : current.baseUrl);
+    if (!baseUrl) throw new Error("baseUrl is required");
+    const authType = (input.authType ?? current.authType) === "jwt" ? "jwt" : "apiKey";
+    let authSecretCipher = current.authSecretCipher;
+    if (Object.hasOwn(input, "authSecret") && input.authSecret) {
+      authSecretCipher = this.secretBox.encrypt(String(input.authSecret));
+    }
+    if (input.clearAuthSecret === true) throw new Error("Connection templates require a saved credential");
+    this.secretBox.decrypt(authSecretCipher);
+    return this.toTemplatePublic(this.database.saveConnectionTemplate({
+      id, name, provider, baseUrl, authType, authSecretCipher,
+    }));
+  }
+
+  deleteTemplate(id) {
+    if (!this.database.getConnectionTemplate(id)) throw new Error("Connection template not found");
+    return this.database.deleteConnectionTemplate(id);
+  }
+
+  applyTemplate(id) {
+    const template = this.database.getConnectionTemplate(id);
+    if (!template) throw new Error("Connection template not found");
+    return {
+      provider: template.provider,
+      baseUrl: template.baseUrl,
+      authType: template.authType,
+      authSecretCipher: template.authSecretCipher,
+      useSavedSecret: true,
+    };
+  }
+
+  toTemplatePublic(template) {
+    if (!template) return null;
+    return {
+      id: template.id,
+      name: template.name,
+      provider: template.provider,
+      baseUrl: template.baseUrl,
+      authType: template.authType,
+      authSecretConfigured: Boolean(template.authSecretCipher),
+      createdAt: template.createdAt,
+      updatedAt: template.updatedAt,
+    };
   }
 
   isRunnable(config) {

@@ -463,3 +463,69 @@ test("a failed action notifies once and is throttled across retries", async (t) 
   assert.match(failures[0].error, /upstream rejected/);
   assert.equal(database.listPendingEvents(monitor.id).length, 1);
 });
+
+
+test("CPR dry-run previews client key resets and skips subscription discovery", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-cpr-engine-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const secretBox = createSecretBox("configuration-test-master-key-32-characters");
+  const store = new ConfigStore(database, secretBox);
+  const monitor = store.create({
+    name: "CPR",
+    provider: "cpr",
+    baseUrl: "https://cpr.example.test",
+    authSecret: "secret",
+    sourceAccountId: "acc_src",
+    targetAccountIds: ["acc_t"],
+    clientKeyIds: ["ck_1"],
+    monitorWindows: ["7d"],
+    confirmationsRequired: 1,
+    dryRun: true,
+    enabled: true,
+  });
+  const calls = [];
+  const client = {
+    async queryCodexQuota() {
+      return {
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          primary_window: { used_percent: 1, reset_at: 2_000, limit_window_seconds: 604800 },
+          secondary_window: undefined,
+        },
+        fetched_at: Math.floor(Date.now() / 1000),
+      };
+    },
+    async getConcurrency() { return null; },
+    async recoverSourceAccount(id) { calls.push(["recover", id]); },
+    async resetTargetAccount(id) { calls.push(["reset", id]); },
+    async resetClientKeyBudget(id, period) { calls.push(["budget", id, period]); },
+    async resetSubscription() { throw new Error("should not reset subscriptions on CPR"); },
+  };
+  const engine = new MonitorEngine({
+    database,
+    configStore: store.forMonitor(monitor.id),
+    monitorId: monitor.id,
+    clientFactory: () => client,
+  });
+  // Seed baseline then fire a natural reset
+  const state = database.getMonitorState(monitor.id);
+  state.sourceAccountId = "acc_src";
+  state.windows = {
+    "7d": {
+      last: { role: "primary", canonicalName: "7d", usedPercent: 80, resetAt: 1000, windowSeconds: 604800, allowed: true, limitReached: false, fetchedAt: Math.floor(Date.now() / 1000) - 10 },
+      pending: null,
+    },
+  };
+  database.saveMonitorState(monitor.id, state);
+  const result = await engine.pollOnce();
+  assert.equal(result.newEvents.length, 1);
+  const event = database.getEvent(result.newEvents[0]);
+  assert.equal(event.status, "preview");
+  assert.equal(event.actions.clientKeys.ck_1.status, "preview");
+  assert.deepEqual(calls, []);
+});

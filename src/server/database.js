@@ -3,11 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const DEFAULT_MONITOR_CONFIG = Object.freeze({
+  provider: "sub2api",
   baseUrl: "",
   authType: "apiKey",
   authSecretCipher: "",
   sourceAccountId: null,
   targetAccountIds: [],
+  clientKeyIds: [],
   monitorWindows: ["7d"],
   pollIntervalSeconds: 300,
   pendingConfirmIntervalSeconds: 60,
@@ -99,7 +101,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS reset_events (
         id TEXT PRIMARY KEY,
         monitor_id TEXT NOT NULL DEFAULT 'legacy',
-        source_account_id INTEGER NOT NULL,
+        source_account_id TEXT NOT NULL,
         window TEXT NOT NULL,
         old_reset_at INTEGER NOT NULL,
         new_reset_at INTEGER NOT NULL,
@@ -133,8 +135,53 @@ export class AppDatabase {
         ON reset_events(monitor_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_audit_created
         ON audit_logs(created_at DESC);
+      CREATE TABLE IF NOT EXISTS connection_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        auth_type TEXT NOT NULL,
+        auth_secret_cipher TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
+    this.migrateResetEventsSourceAccountId();
     this.importLegacyMonitor();
+  }
+
+  migrateResetEventsSourceAccountId() {
+    const info = this.db.prepare("PRAGMA table_info(reset_events)").all();
+    const column = info.find((item) => item.name === "source_account_id");
+    if (!column || String(column.type || "").toUpperCase() === "TEXT") return;
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS reset_events_v2 (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL DEFAULT 'legacy',
+        source_account_id TEXT NOT NULL,
+        window TEXT NOT NULL,
+        old_reset_at INTEGER NOT NULL,
+        new_reset_at INTEGER NOT NULL,
+        old_used_percent REAL NOT NULL,
+        new_used_percent REAL NOT NULL,
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO reset_events_v2(
+        id, monitor_id, source_account_id, window, old_reset_at, new_reset_at,
+        old_used_percent, new_used_percent, status, payload, confirmed_at, completed_at, updated_at
+      )
+      SELECT id, monitor_id, CAST(source_account_id AS TEXT), window, old_reset_at, new_reset_at,
+             old_used_percent, new_used_percent, status, payload, confirmed_at, completed_at, updated_at
+      FROM reset_events;
+      DROP TABLE reset_events;
+      ALTER TABLE reset_events_v2 RENAME TO reset_events;
+      CREATE INDEX IF NOT EXISTS idx_events_monitor_updated
+        ON reset_events(monitor_id, updated_at DESC);
+    `);
   }
 
   importLegacyMonitor() {
@@ -344,6 +391,7 @@ export class AppDatabase {
         event.actions?.sourceRecovery,
         ...Object.values(event.actions?.targetAccounts || {}),
         ...Object.values(event.actions?.subscriptions || {}),
+        ...Object.values(event.actions?.clientKeys || {}),
       ].filter(Boolean);
       for (const action of actions) {
         if (!["success", "preview", "skipped"].includes(action.status)) action.status = "skipped";
@@ -369,6 +417,65 @@ export class AppDatabase {
       SELECT id, level, action, message, details, created_at AS createdAt
       FROM audit_logs ORDER BY id DESC LIMIT ?
     `).all(limit).map((row) => ({ ...row, details: parseJson(row.details, {}) }));
+  }
+
+  listConnectionTemplates() {
+    return this.db.prepare(`
+      SELECT id, name, provider, base_url AS baseUrl, auth_type AS authType,
+             auth_secret_cipher AS authSecretCipher,
+             created_at AS createdAt, updated_at AS updatedAt
+      FROM connection_templates ORDER BY name COLLATE NOCASE ASC
+    `).all();
+  }
+
+  getConnectionTemplate(id) {
+    return this.db.prepare(`
+      SELECT id, name, provider, base_url AS baseUrl, auth_type AS authType,
+             auth_secret_cipher AS authSecretCipher,
+             created_at AS createdAt, updated_at AS updatedAt
+      FROM connection_templates WHERE id = ?
+    `).get(id) || null;
+  }
+
+  saveConnectionTemplate(template) {
+    const now = new Date().toISOString();
+    const existing = this.getConnectionTemplate(template.id);
+    if (existing) {
+      this.db.prepare(`
+        UPDATE connection_templates
+        SET name = ?, provider = ?, base_url = ?, auth_type = ?, auth_secret_cipher = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        template.name,
+        template.provider,
+        template.baseUrl,
+        template.authType,
+        template.authSecretCipher,
+        now,
+        template.id,
+      );
+    } else {
+      this.db.prepare(`
+        INSERT INTO connection_templates(
+          id, name, provider, base_url, auth_type, auth_secret_cipher, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        template.id,
+        template.name,
+        template.provider,
+        template.baseUrl,
+        template.authType,
+        template.authSecretCipher,
+        now,
+        now,
+      );
+    }
+    return this.getConnectionTemplate(template.id);
+  }
+
+  deleteConnectionTemplate(id) {
+    const result = this.db.prepare("DELETE FROM connection_templates WHERE id = ?").run(id);
+    return result.changes > 0;
   }
 
   close() {

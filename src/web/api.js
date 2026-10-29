@@ -39,4 +39,9 @@ export const api = {
   subscribers: (id, refresh = false) => request(`/api/monitors/${encodeURIComponent(id)}/subscribers${refresh ? "?refresh=1" : ""}`),
   events: () => request("/api/events?limit=200"),
   audit: () => request("/api/audit?limit=300"),
+  connectionTemplates: () => request("/api/connection-templates"),
+  createConnectionTemplate: (template) => request("/api/connection-templates", { method: "POST", body: JSON.stringify(template) }),
+  updateConnectionTemplate: (id, template) => request(`/api/connection-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(template) }),
+  deleteConnectionTemplate: (id) => request(`/api/connection-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  applyConnectionTemplate: (id) => request(`/api/connection-templates/${encodeURIComponent(id)}/apply`, { method: "POST" }),
 };

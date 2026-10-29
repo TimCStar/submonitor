@@ -11,7 +11,7 @@ import { createNotifier } from "./notifier.js";
 import { SchedulerManager } from "./scheduler.js";
 import { createSecretBox } from "./secrets.js";
 import { EventBroker } from "./sse.js";
-import { Sub2ApiClient } from "./sub2api-client.js";
+import { createBackendClient } from "./backend-client.js";
 import { buildSubscriberPreview, toPublicSubscriberPreview } from "./subscriber-preview.js";
 import { publicQuotaSharing } from "./quota-sharing.js";
 
@@ -69,7 +69,10 @@ async function subscriberPreview(monitorId, force = false) {
     if (config.subscriptionGroupMode !== "none" && !configStore.isRunnable(config)) {
       throw new Error("Save a complete connection configuration first");
     }
-    const data = await buildSubscriberPreview(new Sub2ApiClient(config), config);
+    if ((config.provider || "sub2api") === "cpr") {
+      return { groups: [], subscriptions: [], generatedAt: new Date().toISOString(), unsupported: "cpr" };
+    }
+    const data = await buildSubscriberPreview(createBackendClient(config), config);
     return { ...data, generatedAt: new Date().toISOString() };
   })();
   subscriberPreviewCache.set(monitorId, { ...cached, promise });
@@ -88,6 +91,7 @@ function actionSummary(event) {
     event.actions?.sourceRecovery,
     ...Object.values(event.actions?.targetAccounts || {}),
     ...Object.values(event.actions?.subscriptions || {}),
+    ...Object.values(event.actions?.clientKeys || {}),
   ].filter(Boolean);
   return {
     total: actions.length,
@@ -340,10 +344,11 @@ async function apiRoute(request, response, url) {
   if (route && request.method === "POST" && route.action === "test") {
     const config = configStore.getPrivate(route.id);
     if (!configStore.isRunnable(config)) throw new Error("Save a complete connection configuration first");
-    const quota = await new Sub2ApiClient(config).queryCodexQuota(config.sourceAccountId);
+    const quota = await createBackendClient(config).queryCodexQuota(config.sourceAccountId);
     const snapshots = extractSnapshots(quota);
-    database.addAudit("info", "monitor.connection_test", "Sub2API connection test succeeded", {
+    database.addAudit("info", "monitor.connection_test", "Connection test succeeded", {
       monitorId: route.id,
+      provider: config.provider || "sub2api",
       sourceAccountId: config.sourceAccountId,
     });
     return sendData(response, { snapshots });
@@ -367,6 +372,41 @@ async function apiRoute(request, response, url) {
   if (route && request.method === "GET" && route.action === "subscribers") {
     return sendData(response, await subscriberPreview(route.id, url.searchParams.get("refresh") === "1"));
   }
+  if (request.method === "GET" && url.pathname === "/api/connection-templates") {
+    return sendData(response, configStore.listTemplatesPublic());
+  }
+  if (request.method === "POST" && url.pathname === "/api/connection-templates") {
+    const template = configStore.createTemplate(await readJson(request));
+    database.addAudit("info", "template.created", "Connection template created", { templateId: template.id, name: template.name });
+    return sendData(response, template, 201);
+  }
+  const templateMatch = url.pathname.match(/^\/api\/connection-templates\/([^/]+)(?:\/(apply))?$/);
+  if (templateMatch) {
+    const templateId = decodeURIComponent(templateMatch[1]);
+    const action = templateMatch[2] || null;
+    if (request.method === "PUT" && !action) {
+      const template = configStore.updateTemplate(templateId, await readJson(request));
+      database.addAudit("info", "template.updated", "Connection template updated", { templateId });
+      return sendData(response, template);
+    }
+    if (request.method === "DELETE" && !action) {
+      configStore.deleteTemplate(templateId);
+      database.addAudit("warn", "template.deleted", "Connection template deleted", { templateId });
+      return sendData(response, { deleted: true });
+    }
+    if (request.method === "POST" && action === "apply") {
+      const applied = configStore.applyTemplate(templateId);
+      return sendData(response, {
+        provider: applied.provider,
+        baseUrl: applied.baseUrl,
+        authType: applied.authType,
+        templateId,
+        useSavedSecret: true,
+        authSecretConfigured: true,
+      });
+    }
+  }
+
   if (request.method === "GET" && url.pathname === "/api/events") {
     const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "100", 10)));
     return sendData(response, database.listEventPayloads(limit));
