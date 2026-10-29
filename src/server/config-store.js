@@ -33,6 +33,35 @@ function choices(value, name, allowed) {
   return result;
 }
 
+const QUOTA_SHARING_MODES = new Set(["equal", "proportional"]);
+
+function quotaSharingMode(value) {
+  const mode = String(value ?? "equal");
+  if (!QUOTA_SHARING_MODES.has(mode)) throw new Error("quotaSharingMode must be equal or proportional");
+  return mode;
+}
+
+// 按比例分配权重：{ 用户ID: 权重 } 或 "12:2, 15:0.5"；未列出的用户权重为 1。
+function quotaSharingWeights(value) {
+  let entries;
+  if (value === null || value === undefined || value === "") entries = [];
+  else if (typeof value === "string") {
+    entries = value.split(/[,，;；\n]+/).map((item) => item.trim()).filter(Boolean).map((item) => {
+      const parts = item.split(/[:：=]/);
+      if (parts.length !== 2) throw new Error("quotaSharingWeights 格式应为 用户ID:权重，用逗号分隔");
+      return parts;
+    });
+  } else if (typeof value === "object" && !Array.isArray(value)) entries = Object.entries(value);
+  else throw new Error("quotaSharingWeights must be an object");
+  const result = {};
+  for (const [userId, weight] of entries) {
+    const id = positiveInteger(String(userId).trim(), "quotaSharingWeights user id");
+    result[String(id)] = numberInRange(String(weight).trim(), "quotaSharingWeights weight", 0.01, 100);
+  }
+  if (Object.keys(result).length > 1000) throw new Error("quotaSharingWeights supports at most 1000 users");
+  return result;
+}
+
 function normalizeBaseUrl(value) {
   const baseUrl = String(value || "").trim().replace(/\/+$/, "");
   if (!baseUrl) return "";
@@ -157,6 +186,8 @@ export class ConfigStore {
       quotaSharingAutoRecalculateEnabled: Boolean(input.quotaSharingAutoRecalculateEnabled ?? current.quotaSharingAutoRecalculateEnabled ?? false),
       quotaSharingIntervalSeconds: positiveInteger(input.quotaSharingIntervalSeconds ?? current.quotaSharingIntervalSeconds ?? 300, "quotaSharingIntervalSeconds", 60, 86400),
       quotaSharingDisplayEnabled: Boolean(input.quotaSharingDisplayEnabled ?? current.quotaSharingDisplayEnabled ?? false),
+      quotaSharingMode: quotaSharingMode(input.quotaSharingMode ?? current.quotaSharingMode ?? "equal"),
+      quotaSharingWeights: quotaSharingWeights(input.quotaSharingWeights ?? current.quotaSharingWeights ?? {}),
       notifyEnabled: Boolean(input.notifyEnabled),
       notifyTelegramEnabled: Boolean(input.notifyTelegramEnabled),
       telegramChatId: String(input.telegramChatId ?? "").trim(),
@@ -238,8 +269,8 @@ export class ConfigStore {
     this.database.saveMonitor(id, next);
     const sharingFields = ["baseUrl", "sourceAccountId", "authSecretCipher", "quotaSharingEnabled", "quotaSharingGroupId",
       "quotaSharingReserveEnabled", "quotaSharingReservePercent", "quotaSharingAutoRecalculateEnabled",
-      "quotaSharingIntervalSeconds", "quotaSharingDisplayEnabled", "dryRun"];
-    if (sharingFields.some((key) => current[key] !== next[key])) {
+      "quotaSharingIntervalSeconds", "quotaSharingDisplayEnabled", "quotaSharingMode", "quotaSharingWeights", "dryRun"];
+    if (sharingFields.some((key) => JSON.stringify(current[key]) !== JSON.stringify(next[key]))) {
       this.database.setSetting(`quota_sharing:${id}`, null);
     }
     let cancelledEvents = 0;

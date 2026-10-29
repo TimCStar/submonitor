@@ -275,6 +275,15 @@ export class MonitorEngine {
     return { quotaSharing: await this.quotaSharing.refresh(config, this.clientFactory(config), { manual: true }) };
   }
 
+  // 定时重算：只读取额度均分所需数据，不查询 Codex 额度，也不执行重置动作。
+  async refreshQuotaSharing() {
+    const config = this.configStore.getPrivate();
+    if (!config.quotaSharingEnabled || !config.quotaSharingAutoRecalculateEnabled || !this.configStore.isRunnable(config)) {
+      return { quotaSharing: null };
+    }
+    return { quotaSharing: await this.quotaSharing.refresh(config, this.clientFactory(config)) };
+  }
+
   async pollOnce() {
     const config = this.configStore.getPrivate();
     if (!this.configStore.isRunnable(config)) throw new Error("Monitor configuration is incomplete");

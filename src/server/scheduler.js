@@ -14,7 +14,9 @@ export class MonitorScheduler {
       lastSuccessAt: null,
       lastError: null,
       nextPollAt: null,
+      nextQuotaSharingAt: null,
     };
+    this.pollDueAt = null;
   }
 
   snapshot() {
@@ -32,35 +34,48 @@ export class MonitorScheduler {
   stop() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.pollDueAt = null;
     this.runtime.status = "stopped";
     this.runtime.nextPollAt = null;
+    this.runtime.nextQuotaSharingAt = null;
     this.publish();
   }
 
-  reschedule(immediate = false, hasPending = false) {
+  reschedule(immediate = false, hasPending = false, keepPollDue = false) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const config = this.configStore.getPublic();
     if (!config.enabled) {
+      this.pollDueAt = null;
       this.runtime.status = "disabled";
       this.runtime.nextPollAt = null;
+      this.runtime.nextQuotaSharingAt = null;
       this.publish();
       return;
     }
-    let interval = hasPending
-      ? Math.min(config.pollIntervalSeconds, config.pendingConfirmIntervalSeconds || 60)
-      : config.pollIntervalSeconds;
-    if (config.quotaSharingAutoRecalculateEnabled && config.quotaSharingEnabled) {
-      interval = Math.min(interval, config.quotaSharingIntervalSeconds);
+    const now = Date.now();
+    if (!keepPollDue || !this.pollDueAt) {
+      const interval = hasPending
+        ? Math.min(config.pollIntervalSeconds, config.pendingConfirmIntervalSeconds || 60)
+        : config.pollIntervalSeconds;
+      this.pollDueAt = now + (immediate ? 1000 : interval * 1000);
     }
-    const delay = immediate ? 1000 : interval * 1000;
+    // 定时重算只触发额度均分，不提前 Codex 额度轮询，避免增加上游请求。
+    let quotaDueAt = null;
+    if (!immediate && config.quotaSharingAutoRecalculateEnabled && config.quotaSharingEnabled) {
+      const candidate = now + config.quotaSharingIntervalSeconds * 1000;
+      if (candidate < this.pollDueAt) quotaDueAt = candidate;
+    }
+    const fireAt = quotaDueAt ?? this.pollDueAt;
     this.runtime.status = this.runningPromise ? "running" : this.runtime.lastError ? "error" : "idle";
-    this.runtime.nextPollAt = new Date(Date.now() + delay).toISOString();
+    this.runtime.nextPollAt = new Date(this.pollDueAt).toISOString();
+    this.runtime.nextQuotaSharingAt = quotaDueAt ? new Date(quotaDueAt).toISOString() : null;
     this.publish();
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.runNow("schedule").catch(() => {});
-    }, delay);
+      const run = quotaDueAt ? this.runQuotaScheduled() : this.runNow("schedule");
+      void run.catch(() => {});
+    }, Math.max(0, fireAt - now));
   }
 
   async runNow(trigger = "manual") {
@@ -68,13 +83,17 @@ export class MonitorScheduler {
   }
 
   async runQuotaNow() {
-    return this.runOperation("quota-sharing", () => this.engine.recalculateQuota());
+    return this.runOperation("quota-sharing", () => this.engine.recalculateQuota(), { quotaOnly: true });
   }
 
-  async runOperation(trigger, operation) {
+  async runQuotaScheduled() {
+    return this.runOperation("quota-sharing-schedule", () => this.engine.refreshQuotaSharing(), { quotaOnly: true });
+  }
+
+  async runOperation(trigger, operation, { quotaOnly = false } = {}) {
     if (this.runningPromise) throw new Error("A quota check is already running");
     this.runtime.status = "running";
-    this.runtime.lastPollAt = new Date().toISOString();
+    if (!quotaOnly) this.runtime.lastPollAt = new Date().toISOString();
     this.runtime.nextPollAt = null;
     this.publish();
     this.runningPromise = Promise.resolve().then(operation);
@@ -92,7 +111,8 @@ export class MonitorScheduler {
     } finally {
       this.runningPromise = null;
       this.publish();
-      this.reschedule(false, Boolean(result?.hasPendingCandidate));
+      // 仅重算额度时保留原定的 Codex 轮询时间。
+      this.reschedule(false, Boolean(result?.hasPendingCandidate), quotaOnly);
     }
   }
 }

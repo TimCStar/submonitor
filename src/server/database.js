@@ -27,6 +27,8 @@ const DEFAULT_MONITOR_CONFIG = Object.freeze({
   quotaSharingAutoRecalculateEnabled: false,
   quotaSharingIntervalSeconds: 300,
   quotaSharingDisplayEnabled: false,
+  quotaSharingMode: "equal",
+  quotaSharingWeights: {},
   notifyEnabled: false,
   notifyTelegramEnabled: false,
   telegramBotTokenCipher: "",

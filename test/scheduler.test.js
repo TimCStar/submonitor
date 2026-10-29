@@ -44,19 +44,28 @@ test("an idle poll keeps the configured 900 second interval", async () => {
   scheduler.stop();
 });
 
-test("optional sharing timer shortens polling but manual mode keeps the normal interval", async () => {
+test("sharing timer recalculates quota without polling Codex more often than configured", async () => {
   let automatic = true;
+  const calls = { poll: 0, quota: 0 };
   const scheduler = new MonitorScheduler({
     configStore: { getPublic: () => ({ enabled: true, pollIntervalSeconds: 900,
       quotaSharingEnabled: true, quotaSharingAutoRecalculateEnabled: automatic, quotaSharingIntervalSeconds: 120 }) },
-    engine: { async pollOnce() { return {}; }, async recalculateQuota() { return { quotaSharing: { status: "preview" } }; } },
+    engine: { async pollOnce() { calls.poll++; return {}; },
+      async refreshQuotaSharing() { calls.quota++; return { quotaSharing: { status: "applied" } }; },
+      async recalculateQuota() { return { quotaSharing: { status: "preview" } }; } },
   });
   try {
     await scheduler.runNow();
-    assert.ok(Math.abs(nextDelaySeconds(scheduler) - 120) < 5);
+    assert.ok(Math.abs(nextDelaySeconds(scheduler) - 900) < 5);
+    assert.ok(Math.abs((Date.parse(scheduler.snapshot().nextQuotaSharingAt) - Date.now()) / 1000 - 120) < 5);
+    await scheduler.runQuotaScheduled();
+    assert.deepEqual(calls, { poll: 1, quota: 1 });
+    // 定时重算不会推迟或提前 Codex 轮询。
+    assert.ok(Math.abs(nextDelaySeconds(scheduler) - 900) < 5);
     automatic = false;
     assert.equal((await scheduler.runQuotaNow()).quotaSharing.status, "preview");
     assert.ok(Math.abs(nextDelaySeconds(scheduler) - 900) < 5);
+    assert.equal(scheduler.snapshot().nextQuotaSharingAt, null);
   } finally { scheduler.stop(); }
 });
 

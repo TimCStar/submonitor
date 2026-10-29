@@ -50,15 +50,42 @@ export function calculateSharedWeeklyLimit(totalBudgetUsd, poolUsedUsd, usages) 
   return limit >= MINIMUM_LIMIT_USD ? limit : null;
 }
 
+// 按比例分配：每人周上限 = 权重 × k，已用额度不清零，剩余份额总和不超过剩余预算。
+// 权重全为 1 时与平均分配结果一致。
+export function calculateProportionalLimits(totalBudgetUsd, poolUsedUsd, entries) {
+  if (!Number.isFinite(totalBudgetUsd) || totalBudgetUsd <= 0 ||
+      !Number.isFinite(poolUsedUsd) || poolUsedUsd < 0 || !entries.length ||
+      entries.some(({ used, weight }) => !Number.isFinite(used) || used < 0 || !Number.isFinite(weight) || weight <= 0)) return null;
+  const remaining = totalBudgetUsd - poolUsedUsd;
+  if (remaining <= 0) return null;
+  let low = 0;
+  let high = Math.max(...entries.map(({ used, weight }) => used / weight)) + remaining / Math.min(...entries.map(({ weight }) => weight));
+  for (let iteration = 0; iteration < 64; iteration++) {
+    const middle = (low + high) / 2;
+    const allowances = entries.reduce((sum, { used, weight }) => sum + Math.max(0, weight * middle - used), 0);
+    if (allowances <= remaining) low = middle;
+    else high = middle;
+  }
+  const shares = entries.map(({ userId, used, weight }) => ({ userId, weight, usedUsd: used,
+    recommendedLimitUsd: Math.floor((weight * low + 1e-9) * 100) / 100 }));
+  return shares.some((share) => share.recommendedLimitUsd >= MINIMUM_LIMIT_USD) ? shares : null;
+}
+
+export const PROPORTIONAL_PREVIEW_NOTE = "按比例分配需要订阅级限额接口，当前仅计算预览";
+
 export function publicQuotaSharing(config, state) {
   if (!config.quotaSharingDisplayEnabled) return null;
   if (!state) return { status: "waiting", note: "等待首次额度采样" };
   const { status, note, checkedAt, estimatedAt, estimatedTotalUsd, estimatedUserTotalUsd, distributableTotalUsd,
     userUsedUsd, usedPercent, cycleResetAt, reservePercent, subscriberCount, recommendedWeeklyLimitUsd,
-    currentWeeklyLimitUsd, lastAppliedAt } = state;
+    currentWeeklyLimitUsd, lastAppliedAt, proportionalShares } = state;
+  // 公开页只给出按比例分配的上下限，不暴露用户 ID 和权重。
+  const limits = Array.isArray(proportionalShares) ? proportionalShares.map((share) => share.recommendedLimitUsd) : [];
   return { status, note, checkedAt, estimatedAt, estimatedTotalUsd, estimatedUserTotalUsd, distributableTotalUsd,
     userUsedUsd, usedPercent, cycleResetAt, reservePercent, subscriberCount, recommendedWeeklyLimitUsd,
-    currentWeeklyLimitUsd, lastAppliedAt };
+    currentWeeklyLimitUsd, lastAppliedAt, mode: state.mode || config.quotaSharingMode || "equal",
+    proportionalMinLimitUsd: limits.length ? Math.min(...limits) : null,
+    proportionalMaxLimitUsd: limits.length ? Math.max(...limits) : null };
 }
 
 export class QuotaSharingService {
@@ -81,7 +108,8 @@ export class QuotaSharingService {
   signature(config) {
     return JSON.stringify([config.baseUrl, config.sourceAccountId, config.authSecretCipher, config.quotaSharingGroupId,
       config.quotaSharingEnabled, config.quotaSharingReserveEnabled, config.quotaSharingReservePercent,
-      config.quotaSharingAutoRecalculateEnabled, config.quotaSharingDisplayEnabled, config.dryRun, config.enabled]);
+      config.quotaSharingAutoRecalculateEnabled, config.quotaSharingIntervalSeconds, config.quotaSharingDisplayEnabled,
+      config.quotaSharingMode || "equal", config.quotaSharingWeights || {}, config.dryRun, config.enabled]);
   }
 
   async groupAccounts(client, groupId) {
@@ -103,9 +131,14 @@ export class QuotaSharingService {
     const now = Date.now();
     if (!manual && !force && previous && now - Date.parse(previous.checkedAt) < config.quotaSharingIntervalSeconds * 1000) return previous;
     const poolKey = `${config.baseUrl}:${config.quotaSharingGroupId || config.sourceAccountId}`;
-    if (activePools.has(poolKey)) throw new Error("该额度池正在重算，请稍后重试");
+    if (activePools.has(poolKey)) {
+      // 自动路径与其它路径一致：不抛错，保留上次结果。
+      if (!manual) return previous || null;
+      throw new Error("该额度池正在重算，请稍后重试");
+    }
     activePools.add(poolKey);
-    const state = { checkedAt: new Date(now).toISOString(), lastAppliedAt: previous?.lastAppliedAt || null,
+    const mode = config.quotaSharingMode === "proportional" ? "proportional" : "equal";
+    const state = { checkedAt: new Date(now).toISOString(), lastAppliedAt: previous?.lastAppliedAt || null, mode,
       status: "waiting", note: "等待完整周窗口数据，使用率达到 5% 后开始估算" };
     try {
       const usage = await client.getAccountUsage(config.sourceAccountId);
@@ -142,6 +175,22 @@ export class QuotaSharingService {
       }
       state.subscriberCount = uniqueUsers.size;
       state.currentWeeklyLimitUsd = finiteNumber(group.weekly_limit_usd) ? Number(group.weekly_limit_usd) : null;
+      if (mode === "proportional") {
+        // Sub2API 只提供分组级 weekly_limit_usd，无法给每个订阅写不同上限：只计算预览，绝不写入。
+        const weights = config.quotaSharingWeights || {};
+        state.recommendedWeeklyLimitUsd = null;
+        state.proportionalShares = calculateProportionalLimits(state.distributableTotalUsd, estimate.userUsedUsd,
+          subscriptions.map((sub) => ({ userId: Number(sub.user_id), used: Number(sub.weekly_usage_usd),
+            weight: Number(weights[String(sub.user_id)] ?? 1) })));
+        if (!state.proportionalShares) {
+          state.status = "blocked";
+          state.note = subscriptions.length ? "可分配预算不足，保留现有限额；不会将 0 写成不限额" : "暂无有效订阅，保留现有限额";
+        } else {
+          state.status = "preview";
+          state.note = PROPORTIONAL_PREVIEW_NOTE;
+        }
+        return this.save(config, state);
+      }
       state.recommendedWeeklyLimitUsd = calculateSharedWeeklyLimit(state.distributableTotalUsd, estimate.userUsedUsd,
         subscriptions.map((sub) => Number(sub.weekly_usage_usd)));
       if (!state.recommendedWeeklyLimitUsd) {

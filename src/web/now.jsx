@@ -168,9 +168,15 @@ const QUOTA_STATUS = { waiting: "等待采样", ready: "已估算", preview: "�
 
 export function QuotaEstimate({ quota, now, showError = false }) {
   const data = quota || { status: "waiting" };
+  const proportional = data.mode === "proportional";
+  const shares = Array.isArray(data.proportionalShares) ? data.proportionalShares : [];
+  const minimum = data.proportionalMinLimitUsd ?? (shares.length ? Math.min(...shares.map((share) => share.recommendedLimitUsd)) : null);
+  const maximum = data.proportionalMaxLimitUsd ?? (shares.length ? Math.max(...shares.map((share) => share.recommendedLimitUsd)) : null);
   return <section className="sheet-section">
-    <h3 className="section-title">周额度估算 <span className="title-note">{QUOTA_STATUS[data.status] || "等待采样"}{data.checkedAt ? ` · ${relative(data.checkedAt, now)}更新` : ""}</span></h3>
-    <p className="big-figure">{money(data.recommendedWeeklyLimitUsd)}<span>建议每人每周</span></p>
+    <h3 className="section-title">周额度估算 <span className="title-note">{proportional ? "按比例 · " : ""}{QUOTA_STATUS[data.status] || "等待采样"}{data.checkedAt ? ` · ${relative(data.checkedAt, now)}更新` : ""}</span></h3>
+    {proportional
+      ? <p className="big-figure">{minimum === null ? money(null) : minimum === maximum ? money(minimum) : `${money(minimum)}～${money(maximum)}`}<span>按比例建议每人每周</span></p>
+      : <p className="big-figure">{money(data.recommendedWeeklyLimitUsd)}<span>建议每人每周</span></p>}
     <dl className="facts">
       <Fact label="当前每人上限">{money(data.currentWeeklyLimitUsd)}</Fact>
       <Fact label="订阅用户">{data.subscriberCount ?? "--"} 人</Fact>
@@ -179,6 +185,13 @@ export function QuotaEstimate({ quota, now, showError = false }) {
     </dl>
     <p className="note">{data.note || "按本周期使用率和费用估算，额度可能变化。"}</p>
     {showError && data.lastError && <p className="note text-bad">{data.lastError}</p>}
+    {showError && proportional && shares.length > 0 && <ul className="subscribers">
+      {shares.map((share) => <li key={share.userId}>
+        <span className="sub-name">用户 #{share.userId}</span>
+        <span className="sub-meta">权重 {share.weight} · 已用 {money(share.usedUsd)}</span>
+        <span className="sub-usage">{money(share.recommendedLimitUsd)}</span>
+      </li>)}
+    </ul>}
   </section>;
 }
 

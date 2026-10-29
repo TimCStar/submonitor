@@ -27,6 +27,8 @@ function initialForm(monitor) {
     authSecret: "", telegramBotToken: "", barkKey: "", emailSmtpPass: "",
     targetAccountIdsText: (monitor.targetAccountIds || []).join(", "),
     subscriptionGroupIdsText: (monitor.subscriptionGroupIds || []).join(", "),
+    quotaSharingMode: monitor.quotaSharingMode || "equal",
+    quotaSharingWeightsText: Object.entries(monitor.quotaSharingWeights || {}).map(([userId, weight]) => `${userId}:${weight}`).join(", "),
     pendingConfirmIntervalSeconds: monitor.pendingConfirmIntervalSeconds ?? 60,
   };
 }
@@ -114,7 +116,7 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
   async function save(event) {
     event?.preventDefault();
     let payload;
-    try { payload = { ...form, targetAccountIds: numberList(form.targetAccountIdsText), subscriptionGroupIds: numberList(form.subscriptionGroupIdsText) }; }
+    try { payload = { ...form, targetAccountIds: numberList(form.targetAccountIdsText), subscriptionGroupIds: numberList(form.subscriptionGroupIdsText), quotaSharingWeights: form.quotaSharingWeightsText }; }
     catch (error) { notify("error", error.message); return; }
     const result = await run("save", () => api.saveMonitor(monitor.id, payload), "已保存");
     if (result) await reload();
@@ -213,6 +215,8 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
       <Toggle checked={form.quotaSharingEnabled} onChange={(value) => update("quotaSharingEnabled", value)} label="按人均分周额度" hint="给专用订阅分组统一设置每人周上限。" />
       {form.quotaSharingEnabled && <div className="nested">
         <Row label="专用分组 ID" htmlFor="qs-group"><TextInput id="qs-group" className="input input-short" type="number" inputMode="numeric" min="1" value={form.quotaSharingGroupId || ""} onChange={(event) => update("quotaSharingGroupId", event.target.value)} /></Row>
+        <Row label="分配方式" stack><Segmented label="分配方式" value={form.quotaSharingMode || "equal"} onChange={(value) => update("quotaSharingMode", value)} options={[{ value: "equal", label: "平均分配" }, { value: "proportional", label: "按比例分配" }]} /></Row>
+        {form.quotaSharingMode === "proportional" && <Row label="用户权重" hint="格式 用户ID:权重，逗号分隔；未列出的用户权重为 1。Sub2API 只有分组级周上限，按比例分配仅计算预览，不会写入。" htmlFor="qs-weights" stack><TextInput id="qs-weights" value={form.quotaSharingWeightsText || ""} onChange={(event) => update("quotaSharingWeightsText", event.target.value)} placeholder="12:2, 15:0.5" /></Row>}
         <Toggle checked={form.quotaSharingReserveEnabled} onChange={(value) => update("quotaSharingReserveEnabled", value)} label="预留一部分额度" />
         {form.quotaSharingReserveEnabled && <Row label="预留比例" htmlFor="qs-reserve"><span className="inline-input"><TextInput id="qs-reserve" type="number" inputMode="decimal" min="0" max="90" step="0.1" value={form.quotaSharingReservePercent ?? ""} onChange={(event) => update("quotaSharingReservePercent", event.target.value)} /><span>%</span></span></Row>}
         <Toggle checked={form.quotaSharingAutoRecalculateEnabled} onChange={(value) => update("quotaSharingAutoRecalculateEnabled", value)} label="定时重算并同步" hint="关闭时只估算，可手动同步。" />
@@ -222,7 +226,7 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
       {(monitor.quotaSharingEnabled || monitor.quotaSharingDisplayEnabled) && <div className="subpanel">
         <QuotaEstimate quota={monitor.quotaSharing} now={now} showError />
         <Button onClick={async () => { const result = await run("quota", () => api.recalculateQuota(monitor.id)); if (result) { await reload(); notify(result.quotaSharing?.status === "blocked" ? "error" : "success", result.quotaSharing?.note || "额度重算完成"); } }} busy={busy === "quota"} disabled={Boolean(busy) || !credentialsReady}>
-          {monitor.quotaSharingEnabled && !monitor.dryRun ? "立即重算并同步" : "刷新估算"}
+          {monitor.quotaSharingEnabled && !monitor.dryRun && monitor.quotaSharingMode !== "proportional" ? "立即重算并同步" : "刷新估算"}
         </Button>
       </div>}
     </Group>

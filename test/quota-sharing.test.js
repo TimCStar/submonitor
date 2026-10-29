@@ -6,7 +6,7 @@ import test from "node:test";
 import { AppDatabase } from "../src/server/database.js";
 import { ConfigStore } from "../src/server/config-store.js";
 import { createSecretBox } from "../src/server/secrets.js";
-import { calculateSharedWeeklyLimit, estimateWeeklyQuota, publicQuotaSharing, QuotaSharingService } from "../src/server/quota-sharing.js";
+import { calculateProportionalLimits, calculateSharedWeeklyLimit, estimateWeeklyQuota, publicQuotaSharing, QuotaSharingService } from "../src/server/quota-sharing.js";
 
 function usage(percent = 10, cost = 100, userCost = 200) {
   return { seven_day: { utilization: percent, resets_at: new Date(Date.now() + 6 * 86400000).toISOString(),
@@ -183,4 +183,79 @@ test("public quota display is opt-in and excludes API errors, credentials and in
   const serialized = JSON.stringify(publicQuotaSharing({ quotaSharingDisplayEnabled: true }, state));
   assert.equal(serialized.includes("1000"), true);
   for (const privateField of ["lastError", "groupId", "authSecret", "secret upstream"]) assert.equal(serialized.includes(privateField), false);
+});
+
+test("equal ceilings handle single users, users above the share, huge numbers and NaN", () => {
+  assert.equal(calculateSharedWeeklyLimit(100, 30, [30]), 100);
+  // 已超出份额的用户不会让其他人的剩余份额超出预算。
+  assert.equal(calculateSharedWeeklyLimit(100, 90, [90, 0]), 10);
+  assert.equal(calculateSharedWeeklyLimit(100, 99.995, [0]), null);
+  assert.equal(calculateSharedWeeklyLimit(1e12, 0, [0, 0]), 5e11);
+  for (const bad of [[NaN], [-1], [Infinity]]) assert.equal(calculateSharedWeeklyLimit(100, 0, bad), null);
+  assert.equal(calculateSharedWeeklyLimit(NaN, 0, [0]), null);
+});
+
+test("proportional ceilings follow weights, keep spent quota and match equal split with unit weights", () => {
+  const entries = (weights, used = weights.map(() => 0)) => weights.map((weight, index) => ({ userId: index + 1, weight, used: used[index] }));
+  assert.deepEqual(calculateProportionalLimits(300, 0, entries([2, 1])).map((share) => share.recommendedLimitUsd), [200, 100]);
+  for (const [total, pool, used] of [[1000, 100, [50, 50, 0, 0]], [1000, 400, [400, 0, 0, 0]], [100, 0, [0, 0, 0]]]) {
+    const shares = calculateProportionalLimits(total, pool, entries(used.map(() => 1), used));
+    assert.ok(shares.every((share) => share.recommendedLimitUsd === calculateSharedWeeklyLimit(total, pool, used)));
+  }
+  // 已用额度计入：剩余份额总和不超过剩余预算。
+  const shares = calculateProportionalLimits(1000, 500, entries([1, 3], [400, 0]));
+  const allowance = shares.reduce((sum, share) => sum + Math.max(0, share.recommendedLimitUsd - share.usedUsd), 0);
+  assert.ok(allowance <= 500 + 1e-9);
+  assert.equal(calculateProportionalLimits(100, 100, entries([1])), null);
+  assert.equal(calculateProportionalLimits(100, 0, entries([0])), null);
+  assert.equal(calculateProportionalLimits(100, 0, []), null);
+});
+
+test("proportional mode only previews per-user shares and never writes the group limit", async (t) => {
+  const f = fixture(t, { quotaSharingMode: "proportional", quotaSharingWeights: "1:3" });
+  f.subs[0].weekly_usage_usd = 0; f.subs[1].weekly_usage_usd = 0;
+  for (const options of [{}, { manual: true }]) {
+    const result = await f.service.refresh(f.config, f.client, options);
+    assert.equal(result.status, "preview");
+    assert.equal(result.mode, "proportional");
+    assert.match(result.note, /订阅级限额接口/);
+    assert.equal(result.recommendedWeeklyLimitUsd, null);
+    // 可分配 1800，已用 200（账号口径），剩余 1600 按 3:1 分。
+    assert.deepEqual(result.proportionalShares.map((share) => [share.userId, share.weight, share.recommendedLimitUsd]), [[1, 3, 1200], [2, 1, 400]]);
+  }
+  assert.deepEqual(f.calls.writes, []);
+  const view = publicQuotaSharing(f.store.getPrivate(f.config.id), f.db.getSetting(`quota_sharing:${f.config.id}`));
+  assert.equal(view.mode, "proportional");
+  assert.equal(view.proportionalMinLimitUsd, 400);
+  assert.equal(view.proportionalMaxLimitUsd, 1200);
+  assert.equal(JSON.stringify(view).includes("proportionalShares"), false);
+});
+
+test("equal split stays the default mode for new and existing monitors", async (t) => {
+  const f = fixture(t);
+  assert.equal(f.config.quotaSharingMode, "equal");
+  assert.deepEqual(f.config.quotaSharingWeights, {});
+  const result = await f.service.refresh(f.config, f.client);
+  assert.equal(result.mode, "equal");
+  assert.equal(result.status, "applied");
+  assert.equal(publicQuotaSharing(f.config, result).mode, "equal");
+});
+
+test("mode and interval changes are part of the stale-result signature", (t) => {
+  const f = fixture(t);
+  for (const change of [{ quotaSharingMode: "proportional" }, { quotaSharingIntervalSeconds: 900 }, { quotaSharingWeights: { 1: 2 } }]) {
+    assert.notEqual(f.service.signature({ ...f.config, ...change }), f.service.signature(f.config));
+  }
+});
+
+test("a busy pool skips automatic refreshes instead of failing the poll", async (t) => {
+  const f = fixture(t);
+  let release;
+  f.client.getAccountUsage = () => new Promise((resolve) => { release = () => resolve(usage()); });
+  const first = f.service.refresh(f.config, f.client, { manual: true });
+  await Promise.resolve();
+  assert.equal(await f.service.refresh(f.config, f.client, { force: true }), null);
+  await assert.rejects(f.service.refresh(f.config, f.client, { manual: true }), /正在重算/);
+  release();
+  assert.equal((await first).status, "applied");
 });

@@ -205,3 +205,27 @@ test("notification credentials stay encrypted, round-trip and can be cleared", (
   assert.equal(cleared.emailSmtpPassConfigured, false);
 });
 
+
+test("quota sharing mode defaults to equal, validates values and parses proportional weights", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "submonitor-sharing-mode-"));
+  const database = new AppDatabase(path.join(directory, "test.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const store = new ConfigStore(database, createSecretBox("sharing-mode-test-master-key-at-least-32"));
+  const monitor = store.create(validConfig());
+  assert.equal(monitor.quotaSharingMode, "equal");
+  assert.deepEqual(monitor.quotaSharingWeights, {});
+  assert.throws(() => store.update(monitor.id, { ...store.getPublic(monitor.id), quotaSharingMode: "weighted" }), /quotaSharingMode/);
+  for (const weights of ["12", "12:0", "12:101", "abc:1", "12:x", [1]]) {
+    assert.throws(() => store.update(monitor.id, { ...store.getPublic(monitor.id), quotaSharingWeights: weights }), /quotaSharingWeights/);
+  }
+  const updated = store.update(monitor.id, { ...store.getPublic(monitor.id), quotaSharingMode: "proportional",
+    quotaSharingWeights: "12: 2，15：0.5\n16=1" }).monitor;
+  assert.equal(updated.quotaSharingMode, "proportional");
+  assert.deepEqual(updated.quotaSharingWeights, { 12: 2, 15: 0.5, 16: 1 });
+  database.setSetting(`quota_sharing:${monitor.id}`, { estimatedTotalUsd: 1000 });
+  store.update(monitor.id, { ...store.getPublic(monitor.id), quotaSharingWeights: { 12: 3 } });
+  assert.equal(database.getSetting(`quota_sharing:${monitor.id}`), null);
+});
