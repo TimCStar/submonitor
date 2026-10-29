@@ -171,12 +171,13 @@ function publicDashboard() {
 }
 
 function adminDashboard() {
+  // Settings/audit do not need snapshot history; public dashboard already carries charts.
+  // Omitting snapshots keeps create/delete reloads responsive as monitor count grows.
   return {
     monitors: configStore.listPublic().map((monitor) => ({
       ...monitor,
       runtime: schedulers.snapshot(monitor.id),
       quotaSharing: database.getSetting(`quota_sharing:${monitor.id}`),
-      snapshots: database.listSnapshots(monitor.id, 40),
     })),
     events: database.listEventPayloads(100),
     audit: database.listAudit(200),

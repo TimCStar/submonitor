@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "./api.js";
 import { friendlyTime, relative, seconds as formatSeconds } from "./format.js";
 import { accountState } from "./status.js";
 import { AccountMark, QuotaEstimate, SubscriberList } from "./now.jsx";
-import { Button, Dot, Empty, Row, SecretInput, Segmented, Skeleton, Stepper, TextInput, Toggle } from "./ui.jsx";
+import { Button, Dot, Empty, Row, SecretInput, Segmented, Skeleton, Spinner, Stepper, TextInput, Toggle } from "./ui.jsx";
 
 function numberList(value) {
   if (!String(value || "").trim()) return [];
@@ -95,7 +95,7 @@ function AdminSubscribers({ monitor }) {
   </div>;
 }
 
-function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDeleted }) {
+function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDelete, deleting }) {
   const [form, setForm] = useState(() => initialForm(monitor));
   const [baseline, setBaseline] = useState(() => editable(initialForm(monitor)));
   const [busy, setBusy] = useState("");
@@ -120,11 +120,6 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
     catch (error) { notify("error", error.message); return; }
     const result = await run("save", () => api.saveMonitor(monitor.id, payload), "已保存");
     if (result) await reload();
-  }
-  async function remove() {
-    if (!window.confirm(`删除“${monitor.name}”以及它的本地历史记录？此操作无法撤销。`)) return;
-    const result = await run("delete", () => api.deleteMonitor(monitor.id), "已删除");
-    if (result !== null) onDeleted();
   }
   const clearSecret = (flag, configured, enabledKey) => patch({ [flag]: true, [configured]: false, [enabledKey]: false });
 
@@ -231,16 +226,19 @@ function MonitorForm({ monitor, publicMonitor, events, now, reload, notify, onDe
       </div>}
     </Group>
 
+    <Group id="danger" title="删除账号" hint="删除后无法恢复本地历史记录。">
+      <div className="danger-zone">
+        <div><strong>删除“{monitor.name}”</strong><p>只删除 SubMonitor 里的这个监控任务和本地历史，不会改动 Sub2API 里的账号。</p></div>
+        <Button variant="danger" onClick={onDelete} busy={deleting} disabled={Boolean(busy) || deleting}>删除</Button>
+      </div>
+    </Group>
+
     <details className="group advanced">
       <summary><h2>高级</h2><p>一般不需要改。</p></summary>
       <div className="group-body">
         <Row label="请求超时" hint="单次请求 Sub2API 的最长等待。" htmlFor="timeout"><span className="inline-input"><TextInput id="timeout" type="number" inputMode="numeric" min="5" max="300" value={form.requestTimeoutSeconds ?? ""} onChange={(event) => update("requestTimeoutSeconds", event.target.value)} /><span>秒</span></span></Row>
         <Row label="重置时间容差" hint="重置时间前移超过这个值才算新周期。" htmlFor="grace"><span className="inline-input"><TextInput id="grace" type="number" inputMode="numeric" min="1" max="3600" value={form.resetGraceSeconds ?? ""} onChange={(event) => update("resetGraceSeconds", event.target.value)} /><span>秒</span></span></Row>
         <Row label="新周期用量上限" hint="重置后用量高于此值时不认为是重置。" htmlFor="maxused"><span className="inline-input"><TextInput id="maxused" type="number" inputMode="decimal" min="0" max="100" value={form.resetMaxUsedPercent ?? ""} onChange={(event) => update("resetMaxUsedPercent", event.target.value)} /><span>%</span></span></Row>
-        <div className="danger-zone">
-          <div><strong>删除这个账号</strong><p>同时删除它的本地历史记录，无法撤销。</p></div>
-          <Button variant="danger" onClick={remove} busy={busy === "delete"} disabled={Boolean(busy)}>删除</Button>
-        </div>
       </div>
     </details>
 
@@ -295,15 +293,54 @@ function TwoFactor({ notify }) {
 }
 
 export function SettingsView({ adminData, publicMonitors = [], events, now, reload, notify }) {
-  const monitors = adminData?.monitors || [];
-  const [selectedId, setSelectedId] = useState(monitors[0]?.id || null);
-  const monitor = useMemo(() => monitors.find((item) => item.id === selectedId) || monitors[0], [monitors, selectedId]);
+  const serverMonitors = adminData?.monitors || [];
+  const [overrideMonitors, setOverrideMonitors] = useState(null);
+  const [selectedId, setSelectedId] = useState(serverMonitors[0]?.id || null);
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => { setOverrideMonitors(null); }, [adminData]);
+  const monitors = overrideMonitors ?? serverMonitors;
+  const monitor = useMemo(() => monitors.find((item) => item.id === selectedId) || monitors[0] || null, [monitors, selectedId]);
+  useEffect(() => {
+    if (selectedId && monitors.length && !monitors.some((item) => item.id === selectedId)) {
+      setSelectedId(monitors[0]?.id || null);
+    }
+  }, [monitors, selectedId]);
+
   async function create() {
+    if (creating || deleting) return;
+    setCreating(true);
     try {
       const created = await api.createMonitor({ name: `Codex 账号 ${monitors.length + 1}` });
-      await reload(); setSelectedId(created.id); notify("success", "已添加，填写连接信息后启用");
-    } catch (error) { notify("error", error.message); }
+      setOverrideMonitors([...(overrideMonitors ?? serverMonitors), created]);
+      setSelectedId(created.id);
+      notify("success", "已添加，填写连接信息后启用");
+      void reload().catch(() => {});
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setCreating(false);
+    }
   }
+
+  async function removeMonitor(target = monitor) {
+    if (!target || creating || deleting) return;
+    if (!window.confirm(`删除“${target.name}”以及它的本地历史记录？此操作无法撤销。`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteMonitor(target.id);
+      const remaining = (overrideMonitors ?? serverMonitors).filter((item) => item.id !== target.id);
+      setOverrideMonitors(remaining);
+      setSelectedId(remaining[0]?.id || null);
+      notify("success", "已删除");
+      void reload().catch(() => {});
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (!adminData) return <div className="view"><Skeleton lines={6} /></div>;
   return <div className="view view-settings">
     <header className="view-head">
@@ -311,12 +348,13 @@ export function SettingsView({ adminData, publicMonitors = [], events, now, relo
       <h1 className="headline headline-account">{monitor && <AccountMark monitor={monitor} />}{monitor ? monitor.name : "添加一个账号"}</h1>
       <div className="account-picker">
         {monitors.length > 1 && <Segmented label="选择账号" value={monitor?.id} onChange={setSelectedId} options={monitors.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? "" : "（已暂停）"}` }))} size="sm" />}
-        <button type="button" className="link" onClick={create}><Plus size={14} />添加账号</button>
+        <button type="button" className="link" onClick={create} disabled={creating || deleting}>{creating ? <Spinner size={14} /> : <Plus size={14} />}{creating ? "添加中…" : "添加账号"}</button>
+        {monitor && <Button variant="danger" onClick={() => removeMonitor(monitor)} busy={deleting} disabled={creating || deleting}><Trash2 size={14} />删除</Button>}
       </div>
     </header>
     {monitor
-      ? <MonitorForm key={monitor.id} monitor={monitor} publicMonitor={publicMonitors.find((item) => item.id === monitor.id)} events={events} now={now} reload={reload} notify={notify} onDeleted={async () => { await reload(); setSelectedId(null); }} />
-      : <Empty title="还没有账号" hint="添加一个 Codex OAuth 账号开始监控。"><button type="button" className="btn btn-primary" onClick={create}>添加账号</button></Empty>}
+      ? <MonitorForm key={monitor.id} monitor={monitor} publicMonitor={publicMonitors.find((item) => item.id === monitor.id)} events={events} now={now} reload={reload} notify={notify} onDelete={() => removeMonitor(monitor)} deleting={deleting} />
+      : <Empty title="还没有账号" hint="添加一个 Codex OAuth 账号开始监控。"><Button variant="primary" onClick={create} busy={creating} disabled={creating}>添加账号</Button></Empty>}
     <TwoFactor notify={notify} />
   </div>;
 }
